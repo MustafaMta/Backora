@@ -1,0 +1,14 @@
+@* Private key entry. The value lives only in the parent component's memory and is never persisted, logged or put in a URL. *@
+<FormField Label="Private key" For="@Id" Error="@(Error ?? (ShowFormatError ? "That doesn't look like an age private key. It starts with AGE-SECRET-KEY-1 and is one line." : null))" Hint="Paste the AGE-SECRET-KEY-1… line. It's used for this restore only and never stored.">
+    <textarea id="@Id" class="ui-textarea ui-textarea--key" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off" value="@Value" @oninput="OnInput" disabled="@Disabled"></textarea>
+</FormField>
+@code {
+    [Parameter] public string Id { get; set; } = "private-key";
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    public static bool LooksValid(string? key) { var k = key?.Trim(); return k is { Length: >= 70 and <= 80 } && k.StartsWith("AGE-SECRET-KEY-1", StringComparison.Ordinal) && !k.Contains(' '); }
+    private bool ShowFormatError => !string.IsNullOrWhiteSpace(Value) && Value!.Trim().Length >= 16 && !LooksValid(Value);
+    private Task OnInput(ChangeEventArgs e) { Value = e.Value?.ToString(); return ValueChanged.InvokeAsync(Value); }
+}

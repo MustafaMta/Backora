@@ -1,0 +1,5 @@
+<nav class="ui-tabs" aria-label="Templates">
+    <a href="/templates" aria-current="@(Active == "templates" ? "page" : null)"><Icon Name="template" Size="14" />Templates</a>
+    <a href="/variables" aria-current="@(Active == "variables" ? "page" : null)"><Icon Name="variable" Size="14" />Variables</a>
+</nav>
+@code { [Parameter] public string Active { get; set; } = "templates"; }

@@ -1,0 +1,8 @@
+@* Compact facts for a storage site: connection, encryption, enabled. *@
+@if (!D.IsEnabled) { <span class="t-warn"><Icon Name="pause" Size="12" />Paused</span> }
+else if (D.LastConnectionTestSucceeded == false) { <span class="t-bad"><Icon Name="unplug" Size="12" />Can't connect</span> }
+else if (D.LastConnectionTestSucceeded == true) { <span class="t-ok"><Icon Name="plug" Size="12" />Connected</span> }
+else { <span><Icon Name="circle-dashed" Size="12" />Not tested</span> }
+@if (D.EncryptionMode != EncryptionModeDto.None) { <span><Icon Name="lock" Size="12" />Encrypted</span> } else { <span><Icon Name="unlock" Size="12" />Not encrypted</span> }
+@if (!string.IsNullOrWhiteSpace(D.Region)) { <span>@D.Region</span> }
+@code { [Parameter, EditorRequired] public S3DestinationDto D { get; set; } = default!; }

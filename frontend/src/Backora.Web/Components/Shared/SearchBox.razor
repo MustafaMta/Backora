@@ -1,0 +1,20 @@
+@implements IDisposable
+<label class="ui-search">
+    <Icon Name="search" Size="14" />
+    <span class="sr-only">@Placeholder</span>
+    <input class="ui-input" type="search" placeholder="@Placeholder" value="@Value" @oninput="OnInput" />
+</label>
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Filter";
+    [Parameter] public EventCallback<string?> OnSearch { get; set; }
+    private CancellationTokenSource? _cts;
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        Value = e.Value?.ToString();
+        _cts?.Cancel(); _cts = new CancellationTokenSource();
+        try { await Task.Delay(250, _cts.Token); } catch (TaskCanceledException) { return; }
+        await OnSearch.InvokeAsync(string.IsNullOrWhiteSpace(Value) ? null : Value.Trim());
+    }
+    public void Dispose() { _cts?.Cancel(); _cts?.Dispose(); }
+}

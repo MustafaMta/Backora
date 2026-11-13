@@ -1,0 +1,15 @@
+@* State emblem: protection ring (closed when healthy, open when not) with a centre mark. Colour from .ov-status--* *@
+<svg viewBox="0 0 56 56" fill="none" aria-hidden="true">
+    <circle cx="28" cy="28" r="25" stroke="currentColor" stroke-opacity=".14" stroke-width="6" />
+    @if (Tone == "ok") { <circle cx="28" cy="28" r="25" stroke="currentColor" stroke-width="3" /> }
+    else { <path d="M28 3a25 25 0 1 1-21.65 12.5" stroke="currentColor" stroke-width="3" stroke-linecap="round" /> }
+    <circle cx="28" cy="28" r="15" fill="currentColor" fill-opacity=".12" />
+    @switch (Tone)
+    {
+        case "ok": <path d="m21 28.5 5 5 9.5-10" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" /> break;
+        case "bad": <path d="m22.5 22.5 11 11m0-11-11 11" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" /> break;
+        case "warn": <path d="M28 21v9" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" /><circle cx="28" cy="35.2" r="1.7" fill="currentColor" /> break;
+        default: <circle cx="28" cy="28" r="3" fill="currentColor" /> break;
+    }
+</svg>
+@code { [Parameter] public string Tone { get; set; } = "ok"; }

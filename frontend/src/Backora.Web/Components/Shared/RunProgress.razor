@@ -1,0 +1,142 @@
+@using System.Globalization
+@using Backora.Web.Services
+@inject ClientClock Clock
+@* Live progress of a running backup: what it is doing, how far it has got, how fast, and when it should finish.
+   Every figure comes from the run (bytes written on the server, the template's own total); nothing is invented.
+   Without a known total the bar is indeterminate and the bytes written still prove the run is moving. *@
+@if (P is { } p)
+{
+    var tone = Tone(p);
+    var v = Describe(p, tone);
+    <section class="rp rp--@tone" aria-label="Backup progress details">
+        <div class="rp__head">
+            <div class="rp__lead">
+                <span class="rp__stage"><span class="rp__pulse" aria-hidden="true"></span>@StageLabel(p.Stage)</span>
+                @if (v.Figure is not null)
+                {
+                    <span class="rp__figure">@v.Figure</span>
+                }
+                else if (p.Percent is { } pct)
+                {
+                    <span class="rp__figure num">@PercentText(pct)<span class="rp__unit">%</span></span>
+                }
+                else
+                {
+                    <span class="rp__figure num">@Fmt.Bytes(p.Bytes)<span class="rp__unit"> written</span></span>
+                }
+            </div>
+            <div class="rp__eta">
+                @if (v.Main is not null)
+                {
+                    <span class="rp__eta-main">@v.Main</span>
+                    @if (v.Sub is not null) { <span class="rp__eta-sub">@v.Sub</span> }
+                }
+            </div>
+        </div>
+
+        @if (p.Percent is { } percent && p.Stage is not ("checkpoint" or "pre-command"))
+        {
+            <span class="ui-progress rp__bar" role="progressbar" aria-label="Backup progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@percent.ToString("0", CultureInfo.InvariantCulture)">
+                <span style="width:@(percent.ToString("0.##", CultureInfo.InvariantCulture))%"></span>
+            </span>
+        }
+        else
+        {
+            <span class="ui-progress ui-progress--indeterminate rp__bar" role="progressbar" aria-label="Backup progress" aria-valuetext="@(v.Figure is not null ? $"{v.Figure}: {v.Main}" : $"{Fmt.Bytes(p.Bytes)} written")"><span></span></span>
+        }
+
+        <dl class="rp__stats">
+            <div><dt>@(p.Stage switch { "archive" or "extra-files" => "Packed", "compress" => "Compressed", "encrypt" => "Encrypted", "verify" => "Checked", _ => "Written" })</dt><dd class="num">@Fmt.Bytes(p.Bytes)@if (p.TotalBytes is { } total) { <span class="rp__of"> of @Fmt.Bytes(total)</span> }</dd></div>
+            <div><dt>Speed</dt><dd class="num">@Speed(p)</dd></div>
+            @if (StartedAt is { } started) { <div><dt>Elapsed</dt><dd class="num">@Fmt.Duration(Now - started)</dd></div> }
+            <div><dt>Last update</dt><dd class="num" title="@Clock.Format(p.UpdatedAt, true)">@Ago(p.UpdatedAt)</dd></div>
+        </dl>
+        @if (!p.Measured)
+        {
+            <p class="rp__note"><Icon Name="info" Size="13" />Measured from the server processes: this run started on a template version without progress reporting.</p>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public RunProgressDto? P { get; set; }
+    [Parameter] public DateTimeOffset? StartedAt { get; set; }
+
+    private static DateTimeOffset Now => DateTimeOffset.UtcNow;
+
+    private sealed record View(string? Figure, string? Main, string? Sub);
+
+    // Stages where no new bytes is expected (waiting on the database) are "waiting", not stalled. Elsewhere a run whose
+    // bytes have not moved for over two minutes is flagged (the worker records a rate of 0 after a minute).
+    private static string Tone(RunProgressDto p)
+    {
+        if (p.Stage is "checkpoint" or "lock-wait" or "pre-command") return "waiting";
+        var quiet = p.BytesPerSecond == 0 ? Now - p.UpdatedAt : TimeSpan.Zero;
+        var limit = p.Stage == "finishing" ? TimeSpan.FromMinutes(15) : TimeSpan.FromMinutes(2);
+        return quiet > limit ? "stalled" : p.BytesPerSecond == 0 ? "idle" : "live";
+    }
+
+    private View Describe(RunProgressDto p, string tone) => p.Stage switch
+    {
+        "checkpoint" => new("Waiting", "Waiting for PostgreSQL's checkpoint; copying starts right after",
+            "PostgreSQL first writes recent changes to disk. With the job's CHECKPOINT set to spread this takes up to 90% of checkpoint_timeout (4.5 minutes by default); fast, the default, starts at once"),
+        "pre-command" => new("Preparing", "Running your pre-backup command", "The backup starts as soon as it finishes"),
+        "lock-wait" => new("Waiting", "Waiting for long-running queries to finish",
+            "Data files are copied. A brief lock is needed; the backup waits up to 10 minutes for it rather than block the database"),
+        _ when tone == "stalled" => new(null, $"No data written for {Fmt.Duration(Now - p.UpdatedAt)}", "Still running on the server; Backora keeps checking"),
+        "finishing" => new("Finishing", "Copying the last changes", "The data files are copied; the backup is being closed"),
+        _ when p.TotalBytes is { } t && p.Bytes >= t => new(null, "Almost done", "More data than estimated; writing the last files"),
+        _ when p.SecondsRemaining is { } left => new(null, $"About {Remaining(left)} left", $"Expected to finish around {FinishAt(left)}"),
+        _ when p.BytesPerSecond is null => new(null, "Measuring speed…", "An estimate appears after the next update"),
+        _ when p.TotalBytes is null => new(null, "Total size not known in advance", "This template doesn't report how much it will write"),
+        _ => new(null, null, null),
+    };
+
+    // Never round up to 100: the run is not done until it has finished.
+    private static string PercentText(double pct) => (Math.Floor(pct * 10) / 10).ToString("0.0", CultureInfo.InvariantCulture);
+
+    private static string StageLabel(string? stage) => stage switch
+    {
+        "checkpoint" => "Waiting for the database checkpoint",
+        "lock-wait" => "Waiting for the backup lock",
+        "compress" => "Compressing into one file and computing its checksums",
+        "verify" => "Verifying checksums",
+        "pre-command" => "Running the pre-backup command",
+        "extra-files" => "Archiving extra files",
+        "finishing" => "Finishing the backup",
+        "copy" => "Copying data files",
+        "dump" => "Dumping databases",
+        "archive" => "Packing the archive",
+        "encrypt" => "Encrypting",
+        _ => "Writing backup data",
+    };
+
+    private static string Speed(RunProgressDto p)
+    {
+        if (p.BytesPerSecond is not { } bps) return "measuring…";
+        if (bps == 0) return "idle";
+        return bps * 60 >= 1L << 30 ? $"{Fmt.Bytes(bps * 60)}/min" : $"{Fmt.Bytes(bps)}/s";
+    }
+
+    private static string Remaining(double seconds)
+    {
+        if (seconds <= 60) return "a minute";
+        if (seconds <= 3600) return $"{Math.Ceiling(seconds / 60):0} min";
+        if (seconds <= 86400) return $"{(int)(seconds / 3600)} h {Math.Ceiling(seconds % 3600 / 60):0} min";
+        return Fmt.Duration(seconds);
+    }
+
+    private string FinishAt(double seconds)
+    {
+        var at = TimeZoneInfo.ConvertTime(Now.AddSeconds(seconds), Clock.Zone);
+        var today = TimeZoneInfo.ConvertTime(Now, Clock.Zone).Date;
+        var time = at.ToString("HH:mm", CultureInfo.InvariantCulture);
+        return at.Date == today ? time : at.Date == today.AddDays(1) ? $"{time} tomorrow" : at.ToString("MMM d, HH:mm", CultureInfo.InvariantCulture);
+    }
+
+    private static string Ago(DateTimeOffset at)
+    {
+        var s = Math.Max(0, (Now - at).TotalSeconds);
+        return s < 5 ? "just now" : s < 60 ? $"{s:0}s ago" : $"{Fmt.Duration(s)} ago";
+    }
+}

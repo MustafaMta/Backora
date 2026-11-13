@@ -1,0 +1,17 @@
+@implements IDisposable
+@inject ToastService Service
+<div class="ui-toasts" role="region" aria-label="Notifications" aria-live="polite">
+    @foreach (var t in Service.Items)
+    {
+        <div class="ui-toast ui-toast--@t.Kind.ToString().ToLowerInvariant()" role="@(t.Kind == ToastKind.Error ? "alert" : "status")" @key="t.Id">
+            <Icon Name="@(t.Kind switch { ToastKind.Success => "circle-check", ToastKind.Error => "circle-alert", ToastKind.Warning => "alert", _ => "info" })" Size="17" />
+            <div class="grow"><div class="ui-toast__title">@t.Title</div>@if (t.Message is not null) { <div class="ui-toast__msg">@t.Message</div> }@if (t.Reference is not null) { <div class="ui-toast__ref">Reference @t.Reference</div> }</div>
+            <Btn Variant="ghost" Size="sm" IconOnly="true" Icon="x" AriaLabel="Dismiss" OnClick="() => Service.Dismiss(t.Id)" />
+        </div>
+    }
+</div>
+@code {
+    protected override void OnInitialized() => Service.Changed += Refresh;
+    private void Refresh() => InvokeAsync(StateHasChanged);
+    public void Dispose() => Service.Changed -= Refresh;
+}

@@ -1,0 +1,101 @@
+@page "/runs"
+<PageTitle>Backup history · Backora</PageTitle>
+
+<PageHead Title="Run history" BackHref="/jobs" BackLabel="Backup jobs" Subtitle="Every backup run, newest first.">
+    <Below>
+        <div class="viewbar">
+            <nav class="ui-tabs" aria-label="Views">
+                @foreach (var f in Filters) { <button type="button" aria-selected="@(_filter == f.Key ? "true" : "false")" @onclick="() => SetFilter(f.Key)">@f.Label</button> }
+            </nav>
+            @if (JobId is not null && _jobName is not null) { <span class="ui-badge ui-badge--plain">@_jobName <a href="/runs" aria-label="Clear backup filter" style="display:inline-flex"><Icon Name="x" Size="12" /></a></span> }
+            <div class="viewbar__end"><SearchBox Placeholder="Filter by backup or server" Value="@_q" OnSearch="SearchAsync" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load backup history" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_page is null) { <ListSkel /> }
+    else if (_page.Items.Count == 0 && _filter == "failed" && _q is null) { <Empty Art="backups" Title="No failed runs" Message="New failures appear here. Cleared ones are kept under Cleared." /> }
+    else if (_page.Items.Count == 0 && _filter == "cleared") { <Empty Art="backups" Title="Nothing cleared" Message="Failed runs you clear are kept here, out of the way of the rest of the history." /> }
+    else if (_page.Items.Count == 0) { <Empty Art="backups" Title="No runs here" Message="@(_filter == "all" && _q is null ? "Runs appear as soon as a backup starts." : "Nothing matches this view.")" /> }
+    else
+    {
+        @if (_filter == "failed" && _q is null && Can(Permissions.JobsRun))
+        {
+            <div class="row" style="justify-content:space-between;gap:12px;margin-bottom:12px">
+                <span class="muted">@Ui.Plural(_page.Total, "failed run needs", "failed runs need") attention@(_jobName is null ? "" : $" for {_jobName}"). Clear the ones you have dealt with to keep only new failures here.</span>
+                <Btn Size="sm" Icon="check" OnClick="() => _confirmClear = true">Clear all</Btn>
+            </div>
+        }
+        <div class="ui-list__head cols-run" aria-hidden="true"><span></span><span>Backup</span><span>Started</span><span style="text-align:right">Size</span><span style="text-align:right">Took</span><span>Status</span><span></span></div>
+        <div class="ui-list" role="list">
+            @foreach (var day in _page.Items.GroupBy(r => DayLabel(r.StartedAt ?? r.CreatedAt)))
+            {
+                <div class="ui-list__group">@day.Key<span class="ui-count">@day.Count()</span></div>
+                @foreach (var r in day)
+                {
+                    <a class="ui-list__row cols-run" href="/runs/@r.Id" role="listitem">
+                        <StatusBadge View="@(r.DismissedAt is not null ? Cleared : StatusMap.Run(r.Status))" IconOnly="true" />
+                        <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none;max-width:60%">@r.JobName</span><span class="ui-list__sub">@r.ServerName</span></span>
+                        <span class="ui-list__meta hide-sm">@TimeOf(r.StartedAt ?? r.CreatedAt) · @StatusMap.Trigger(r.Trigger)</span>
+                        <span class="ui-list__meta hide-sm" style="text-align:right">@Fmt.Bytes(r.TotalArtifactBytes)</span>
+                        <span class="ui-list__meta hide-sm" style="text-align:right">@Fmt.Duration(r.DurationSeconds)</span>
+                        <span class="hide-sm"><StatusBadge View="@(r.DismissedAt is not null ? Cleared : StatusMap.Run(r.Status))" /></span>
+                        <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                    </a>
+                }
+            }
+        </div>
+        <Pager Page="_pageNo" PageSize="PageSize" Total="_page.Total" One="run" Many="runs" OnChange="GoAsync" />
+    }
+</div>
+
+<Confirm @bind-Open="_confirmClear" Title="@(_jobName is null ? "Clear all failed runs?" : $"Clear the failed runs of {_jobName}?")" Icon="check" ConfirmText="Clear all" Busy="_clearing" OnConfirm="ClearAllAsync"
+         Message="They leave the run history and stop raising &quot;last run failed&quot; alerts, so only new failures show. Nothing is deleted: they are kept under Cleared." />
+
+@code {
+    private const int PageSize = 50;
+    [SupplyParameterFromQuery(Name = "jobId")] public long? JobId { get; set; }
+    private PagedResult<RunSummaryDto>? _page;
+    private string? _error, _q, _jobName;
+    private string _filter = "all";
+    private int _pageNo = 1;
+    private bool _confirmClear, _clearing;
+    private static readonly StatusView Cleared = new("Cleared", StatusTone.Neutral, "check", "This run failed and was cleared: it is kept here, out of the rest of the history.");
+
+    private async Task ClearAllAsync()
+    {
+        _clearing = true;
+        var r = await Api.Runs.DismissAllFailedAsync(JobId);
+        _clearing = false;
+        _confirmClear = false;
+        if (Handle(r, "Failed runs cleared", r.Value is { } v ? $"{Ui.Plural(v.Count, "failed run", "failed runs")} cleared. New failures will show here." : null)) await LoadAsync();
+    }
+    private static readonly (string Key, string Label)[] Filters = [("all", "All runs"), ("failed", "Failed"), ("running", "Running"), ("completed", "Succeeded"), ("cleared", "Cleared")];
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        if (JobId is long id) { var j = await Api.Jobs.GetAsync(id); _jobName = j.Value?.Name; }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        RunStatusDto? status = _filter switch { "failed" => RunStatusDto.Failed, "running" => RunStatusDto.Running, "completed" => RunStatusDto.Completed, _ => null };
+        var r = await Api.Runs.ListAsync(new RunFilter(status, JobId, Q: _q, Cleared: _filter == "cleared"), _pageNo, PageSize, "-createdAt", PageToken);
+        _error = ErrorOf(r); _page = r.Value;
+    }
+
+    private string DayLabel(DateTimeOffset at)
+    {
+        var d = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, Clock.Zone).DateTime);
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, Clock.Zone).DateTime);
+        return d == today ? "Today" : d == today.AddDays(-1) ? "Yesterday" : d.ToString("dddd, d MMMM", CultureInfo.InvariantCulture);
+    }
+    private string TimeOf(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, Clock.Zone).ToString("HH:mm", CultureInfo.InvariantCulture);
+    private Task SetFilter(string k) { _filter = k; _pageNo = 1; _page = null; return LoadAsync(); }
+    private Task SearchAsync(string? q) { _q = q; _pageNo = 1; return LoadAsync(); }
+    private Task GoAsync(int p) { _pageNo = p; return LoadAsync(); }
+}

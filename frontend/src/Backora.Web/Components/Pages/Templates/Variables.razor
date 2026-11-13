@@ -1,0 +1,159 @@
+@page "/variables"
+<PageTitle>Variables · Backora</PageTitle>
+
+<PageHead Title="Variables" BackHref="/templates" BackLabel="Templates">
+    <Actions>@if (Can(Permissions.TemplatesWrite)) { <Btn Variant="primary" Icon="plus" OnClick="() => Edit(null)">New variable</Btn> }</Actions>
+    <Below><div class="viewbar"><TemplateTabs Active="variables" /><div class="viewbar__end">Backup settings: <span class="mono">NAME</span> for all jobs, <span class="mono">NAME__JOB</span> for one job</div></div></Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load variables" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_items is null) { <ListSkel Rows="6" /> }
+    else if (_items.Count == 0) { <Empty Icon="variable" Title="No variables yet" Message="Add the connection settings backups use, such as DB_USER and DB_PASSWORD, for all jobs or for one job." /> }
+    else
+    {
+        <div class="vars-bar">
+            <div class="vars-search"><Icon Name="search" Size="15" /><input type="search" placeholder="Search name, job or value…" value="@_q" @oninput="e => _q = e.Value?.ToString() ?? string.Empty" aria-label="Search variables" /></div>
+            <div class="ui-segment" role="group" aria-label="Show">
+                @foreach (var (key, label) in Views) { <button type="button" aria-pressed="@(_view == key ? "true" : "false")" @onclick="() => _view = key">@label <span class="muted">@Count(key)</span></button> }
+            </div>
+        </div>
+        <div class="ui-list__head cols-var" aria-hidden="true"><span></span><span>Name</span><span>Applies to</span><span>Value</span><span style="text-align:right">Used by</span><span></span></div>
+        <div class="ui-list" role="list">
+            @foreach (var v in Shown)
+            {
+                <div class="ui-list__row cols-var" role="listitem">
+                    <span class="ui-glyph"><Icon Name="@(v.IsSecret ? "lock" : "variable")" Size="14" /></span>
+                    <span style="min-width:0"><span class="ui-list__title mono" style="display:block">@v.Name</span>@if (v.Description is not null) { <span class="ui-list__sub" style="display:block">@v.Description</span> }</span>
+                    <span class="vars-applies hide-sm">
+                        @if (v.Setting is null) { <span class="ui-badge" title="Used as {@v.Name} in template text">Placeholder</span> }
+                        else if (v.AppliesTo == "*") { <span class="ui-badge ui-badge--accent">All jobs</span> }
+                        else if (!v.JobFound) { <span class="ui-badge ui-badge--warn" title="No backup job matches this name">@v.AppliesTo?</span> }
+                        else { <span class="truncate" title="Backup job">@v.AppliesTo</span> }
+                    </span>
+                    <span class="ui-list__meta hide-sm mono truncate">@(v.IsSecret ? (v.HasValue ? "•••••••• secret" : "not set") : v.Value ?? "—")</span>
+                    <span class="ui-list__meta hide-sm" style="text-align:right">@Ui.Plural(v.UsedByTemplates, "template", "templates")</span>
+                    <span class="cell-end">@if (Can(Permissions.TemplatesWrite)) { <Btn Size="sm" Variant="ghost" IconOnly="true" Icon="edit" AriaLabel="@($"Edit {v.Name}")" OnClick="() => Edit(v)" /><Btn Size="sm" Variant="ghost" IconOnly="true" Icon="trash" AriaLabel="@($"Delete {v.Name}")" OnClick="() => _deleting = v" /> }</span>
+                </div>
+            }
+            @if (!Shown.Any()) { <div class="vars-none muted">No variables match.</div> }
+        </div>
+        <Pager Total="Shown.Count()" One="variable" Many="variables" />
+    }
+</div>
+
+<Drawer @bind-Open="_open" Title="@(_editing is null ? "New variable" : $"Edit {_editing.Name}")" Subtitle="Backup settings and template placeholders" Icon="variable">
+    <ChildContent>
+        <div class="stack">
+            @if (_formError is not null) { <div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div>@_formError</div></div> }
+            @if (_editing is null)
+            {
+                <div class="ui-segment" role="group" aria-label="Kind">
+                    <button type="button" aria-pressed="@(_kind == "setting" ? "true" : "false")" @onclick="@(() => SetKind("setting"))">Backup setting</button>
+                    <button type="button" aria-pressed="@(_kind == "placeholder" ? "true" : "false")" @onclick="@(() => SetKind("placeholder"))">Template placeholder</button>
+                </div>
+            }
+            @if (_editing is null && _kind == "setting")
+            {
+                <FormField Label="Setting" For="vset" Hint="@SelSpec?.Help">
+                    <select id="vset" class="ui-input" value="@_setting" @onchange="e => PickSetting(e.Value?.ToString())">
+                        <option value="">Choose a setting…</option>
+                        @foreach (var sp in _specs) { <option value="@sp.Name">@sp.Label (@sp.Name)</option> }
+                    </select>
+                </FormField>
+                <FormField Label="Applies to" For="vjob">
+                    <SearchSelect TItem="JobOption" Id="vjob" Items="_jobOptions" Selected="_job" OnSelect="PickJob" Icon="jobs"
+                                  Text="j => j.Label" Sub="@(j => j.Name is null ? "Every backup job" : TemplateSettingsKey(j.Name))" Key="j => j.Name ?? string.Empty"
+                                  Placeholder="All jobs" SearchPlaceholder="Search jobs…" />
+                </FormField>
+                <div class="xs muted row"><Icon Name="variable" Size="13" />Saved as <span class="mono">@(_m.Name.Length == 0 ? "—" : _m.Name)</span></div>
+            }
+            else
+            {
+                <FormField Label="Name" For="vname" Hint="Letters, numbers and underscores." Error="@_last?.FieldError("Name")"><input id="vname" class="ui-input mono" @bind="_m.Name" /></FormField>
+            }
+            <Switch Id="vsecret" Value="_m.IsSecret" ValueChanged="v => _m.IsSecret = v" Label="Secret" Description="Stored encrypted and never shown again." />
+            <FormField Label="Value" For="vvalue" Hint="@(_editing is { IsSecret: true, HasValue: true } && _m.IsSecret ? "Leave empty to keep the stored value." : null)" Error="@_last?.FieldError("Value")">
+                <input id="vvalue" class="ui-input mono" type="@(_m.IsSecret ? "password" : "text")" autocomplete="off" @bind="_m.Value" />
+            </FormField>
+            <FormField Label="Description" For="vdesc" Optional="true"><input id="vdesc" class="ui-input" @bind="_m.Description" /></FormField>
+        </div>
+    </ChildContent>
+    <Footer><Btn Variant="ghost" OnClick="() => _open = false">Cancel</Btn><Btn Variant="primary" Icon="check" Busy="_saving" Disabled="@string.IsNullOrWhiteSpace(_m.Name)" OnClick="SaveAsync">@(_editing is null ? "Create variable" : "Save changes")</Btn></Footer>
+</Drawer>
+<Confirm Open="_deleting is not null" OpenChanged="o => { if (!o) _deleting = null; }" Title="Delete this variable?" Danger="true" Icon="trash" ConfirmText="Delete" OnConfirm="DeleteAsync"
+         Message="@(_deleting is { Setting: not null } ds ? $"Backups of {(ds.AppliesTo == "*" ? "every job" : ds.AppliesTo)} will no longer get {ds.Setting} from it." : _deleting is { UsedByTemplates: > 0 } d ? $"{Ui.Plural(d.UsedByTemplates, "template uses", "templates use")} it. Their backups will fail until it's added again." : "It isn't used by any template.")" />
+
+@code {
+    private List<VariableDto>? _items;
+    private List<TemplateSettingDto> _specs = [];
+    private List<JobOption> _jobOptions = [new(null, "All jobs")];
+    private JobOption? _job;
+    private string _q = string.Empty, _view = "all", _kind = "setting", _setting = string.Empty;
+    private static readonly (string Key, string Label)[] Views = [("all", "All"), ("setting", "Backup settings"), ("placeholder", "Placeholders")];
+    private sealed record JobOption(string? Name, string Label);
+
+    private TemplateSettingDto? SelSpec => _specs.FirstOrDefault(x => x.Name == _setting);
+    private static string TemplateSettingsKey(string job) => System.Text.RegularExpressions.Regex.Replace(job.ToUpperInvariant(), "[^A-Z0-9]+", "_");
+    private int Count(string view) => (_items ?? []).Count(v => view == "all" || (view == "setting") == (v.Setting is not null));
+    private IEnumerable<VariableDto> Shown => (_items ?? [])
+        .Where(v => _view == "all" || (_view == "setting") == (v.Setting is not null))
+        .Where(v => _q.Length == 0 || v.Name.Contains(_q, StringComparison.OrdinalIgnoreCase) || (v.AppliesTo?.Contains(_q, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (v.Description?.Contains(_q, StringComparison.OrdinalIgnoreCase) ?? false) || (!v.IsSecret && (v.Value?.Contains(_q, StringComparison.OrdinalIgnoreCase) ?? false)));
+    private VariableDto? _editing, _deleting;
+    private readonly Model _m = new();
+    private string? _error, _formError;
+    private ApiResult? _last;
+    private bool _open, _saving;
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var list = Api.Variables.ListAsync();
+        var templates = Api.Templates.ListAsync();
+        var jobs = Can(Permissions.JobsRead) ? Api.Jobs.ListAsync(new JobFilter(), 1, 500, "name") : null;
+        var r = await list; _error = ErrorOf(r);
+        // Backup settings first (all-jobs values, then per job), then template placeholders.
+        _items = r.Value?.OrderBy(v => v.Setting is null).ThenBy(v => v.AppliesTo == "*" ? "" : v.AppliesTo, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Name, StringComparer.Ordinal).ToList();
+        _specs = ((await templates).Value ?? []).SelectMany(t => t.Settings ?? []).GroupBy(x => x.Name).Select(g => g.First()).OrderBy(x => x.Name).ToList();
+        if (jobs is not null) _jobOptions = [new(null, "All jobs"), .. ((await jobs).Value?.Items ?? []).OrderBy(j => j.Name, StringComparer.OrdinalIgnoreCase).Select(j => new JobOption(j.Name, j.Name))];
+    }
+
+    private void SetKind(string kind) { _kind = kind; _m.Name = kind == "setting" ? ComposeName() : string.Empty; }
+    private void PickSetting(string? name) { _setting = name ?? string.Empty; _m.IsSecret = SelSpec?.Secret ?? false; _m.Name = ComposeName(); }
+    private void PickJob(JobOption j) { _job = j; _m.Name = ComposeName(); }
+    private string ComposeName() => _setting.Length == 0 ? string.Empty : _job?.Name is { } n ? $"{_setting}__{TemplateSettingsKey(n)}" : _setting;
+
+    private void Edit(VariableDto? v)
+    {
+        _editing = v; _last = null; _formError = null; _kind = "setting"; _setting = string.Empty; _job = null;
+        _m.Name = v?.Name ?? ""; _m.IsSecret = v?.IsSecret ?? false; _m.Value = v is { IsSecret: false } ? v.Value : null; _m.Description = v?.Description;
+        _open = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _formError = null;
+        var value = _m.IsSecret && string.IsNullOrEmpty(_m.Value) && _editing is { IsSecret: true } ? null : _m.Value;
+        var req = new VariableUpsertRequest(_m.Name.Trim(), _m.IsSecret, value, string.IsNullOrWhiteSpace(_m.Description) ? null : _m.Description.Trim());
+        ApiResult r = _editing is null ? await Api.Variables.CreateAsync(req) : await Api.Variables.UpdateAsync(_editing.Id, req);
+        _saving = false; _last = r;
+        if (r.Ok)
+        {
+            _m.Value = null; _open = false; Toasts.Success("Variable saved", _m.Name);
+            await LoadAsync(); return;
+        }
+        if (r.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _formError = r.Message; return; }
+        Handle(r);
+    }
+
+    private async Task DeleteAsync()
+    {
+        var v = _deleting; _deleting = null;
+        if (v is null) return;
+        if (Handle(await Api.Variables.DeleteAsync(v.Id), "Variable deleted", v.Name)) await LoadAsync();
+    }
+
+    private sealed class Model { public string Name { get; set; } = ""; public bool IsSecret { get; set; } public string? Value { get; set; } public string? Description { get; set; } }
+}

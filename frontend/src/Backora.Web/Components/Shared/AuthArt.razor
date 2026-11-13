@@ -1,0 +1,57 @@
+@* Sign-in artwork: the Backora ziggurat as a hairline architectural elevation, with nested contours and
+   light that travels its outline. Original vector. Decorative only (aria-hidden); motion honours reduced-motion. *@
+<svg class="az-art" viewBox="0 0 640 400" aria-hidden="true" focusable="false">
+    <defs>
+        <linearGradient id="az-fade" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="640" y2="0">
+            <stop offset="0" class="az-s-0" /><stop offset=".22" class="az-s-1" /><stop offset=".5" class="az-s-2" /><stop offset=".78" class="az-s-1" /><stop offset="1" class="az-s-0" />
+        </linearGradient>
+        <linearGradient id="az-rise" gradientUnits="userSpaceOnUse" x1="0" y1="130" x2="0" y2="0">
+            <stop offset="0" class="az-r-0" /><stop offset="1" class="az-r-1" />
+        </linearGradient>
+        <radialGradient id="az-core" cx=".5" cy=".5" r=".5"><stop offset="0" class="az-c-0" /><stop offset="1" class="az-c-1" /></radialGradient>
+        <path id="az-outline" d="M60 360L100 280H150L175 215H230L245 170H290V130H350V170H395L410 215H465L490 280H540L580 360" />
+    </defs>
+
+    <ellipse cx="320" cy="170" rx="150" ry="110" fill="url(#az-core)" class="az-core" />
+
+    @* Light rising from the shrine *@
+    <path d="M306 130V0M313 130V0M320 130V0M327 130V0M334 130V0" stroke="url(#az-rise)" class="az-rise" />
+
+    @* Nested contours *@
+    <use href="#az-outline" class="az-line az-line--c2" transform="translate(320 360) scale(.56) translate(-320 -360)" />
+    <use href="#az-outline" class="az-line az-line--c1" transform="translate(320 360) scale(.78) translate(-320 -360)" />
+
+    @* Elevation: terraces, stairways, ground *@
+    <path d="M100 280H540M175 215H465M245 170H395" class="az-line az-line--tier" />
+    <path d="M140 360L300 282M500 360L340 282M306 360L311 280L314 215L316 170M334 360L329 280L326 215L324 170" class="az-line az-line--stair" />
+    <path d="@Steps" class="az-line az-line--step" />
+    <path d="M0 360H640" class="az-line az-line--ground" />
+    <use href="#az-outline" class="az-line az-line--main" />
+    <rect x="312" y="146" width="16" height="24" rx="8" ry="8" class="az-door" />
+
+    @* Light travelling the outline *@
+    <path d="M60 360L100 280H150L175 215H230L245 170H290V130H350V170H395L410 215H465L490 280H540L580 360" pathLength="1000" class="az-pulse" />
+    <path d="M60 360L100 280H150L175 215H230L245 170H290V130H350V170H395L410 215H465L490 280H540L580 360" pathLength="1000" class="az-pulse az-pulse--2" />
+
+    @* Survey markers *@
+    <g class="az-nodes">
+        <circle cx="100" cy="280" r="2.4" /><circle cx="540" cy="280" r="2.4" />
+        <circle cx="175" cy="215" r="2.4" /><circle cx="465" cy="215" r="2.4" />
+        <circle cx="245" cy="170" r="2.4" /><circle cx="395" cy="170" r="2.4" />
+        <circle cx="320" cy="130" r="3" class="az-node--apex" />
+    </g>
+</svg>
+
+@code {
+    private static readonly string Steps = BuildSteps();
+    private static string BuildSteps()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var y = 352; y > 284; y -= 8)
+        {
+            var inset = (360 - y) * 5.0 / 80;
+            sb.Append(System.FormattableString.Invariant($"M{306 + inset + 1:0.#} {y}H{334 - inset - 1:0.#}"));
+        }
+        return sb.ToString();
+    }
+}

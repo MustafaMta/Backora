@@ -1,0 +1,22 @@
+@* Selectable card. Multi = checkbox semantics, otherwise radio. *@
+<button type="button" class="ui-choice @Class" role="@(Multi ? "checkbox" : "radio")" aria-checked="@(Selected ? "true" : "false")" disabled="@Disabled" @onclick="() => OnSelect.InvokeAsync()">
+    <span class="ui-glyph @GlyphClass"><Icon Name="@Icon" Size="16" /></span>
+    <span style="min-width:0">
+        <span class="ui-choice__title" style="display:block">@Title</span>
+        @if (Subtitle is not null) { <span class="ui-choice__sub" style="display:block">@Subtitle</span> }
+        @if (Facts is not null) { <span class="ui-choice__facts">@Facts</span> }
+    </span>
+    <span class="ui-choice__mark" aria-hidden="true"><Icon Name="check" Size="12" /></span>
+</button>
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string Icon { get; set; } = "circle";
+    [Parameter] public string? GlyphClass { get; set; }
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public bool Multi { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public RenderFragment? Facts { get; set; }
+    [Parameter] public EventCallback OnSelect { get; set; }
+}

@@ -1,0 +1,23 @@
+@* Section: a titled group separated by a hairline. Boxed = bordered surface (forms, settings). *@
+<section class="ui-section @(Flush ? "ui-section--flush" : null) @(Boxed ? "ui-section--boxed" : null) @Class" aria-labelledby="@(Title is null ? null : _id)">
+    @if (Title is not null || Actions is not null)
+    {
+        <header class="ui-section__head">
+            @if (Title is not null) { <h2 id="@_id">@if (Icon is not null) { <Icon Name="@Icon" Size="14" /> }@Title</h2> }
+            @if (Actions is not null) { <div class="ui-section__actions">@Actions</div> }
+        </header>
+    }
+    <div class="ui-section__body">@ChildContent</div>
+    @if (Footer is not null) { <footer class="ui-section__foot">@Footer</footer> }
+</section>
+@code {
+    private readonly string _id = "s" + Guid.NewGuid().ToString("N")[..8];
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool Flush { get; set; }
+    [Parameter] public bool Boxed { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+}

@@ -1,0 +1,236 @@
+@page "/settings"
+@page "/settings/{Section}"
+<PageTitle>Settings · Backora</PageTitle>
+
+<PageHead Title="Settings">
+    <Actions>@if (Can(Permissions.SettingsWrite) && _loaded && Current != "ssh") { <Btn Variant="primary" Icon="check" Busy="_saving" OnClick="SaveAsync">Save</Btn> }</Actions>
+    <Below>
+        <div class="viewbar">
+            <nav class="ui-tabs" aria-label="Settings">
+                @foreach (var t in Tabs) { <a href="@($"/settings/{t.Key}")" aria-current="@(Current == t.Key ? "page" : null)"><Icon Name="@t.Icon" Size="14" />@t.Label</a> }
+            </nav>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="page page--narrow app-page" @key="Current">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load these settings" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (!_loaded) { <Loading Text="Loading settings…" /> }
+    else
+    {
+        var ro = !Can(Permissions.SettingsWrite);
+        @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+        <div>
+        @switch (Current)
+        {
+            case "storage":
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Shared backup storage</h2><p>The NFS share where backups land before they go off-site. Mounted on every server and the execution host.</p></div>
+                    <div class="doc-section__body">
+                        <FormField Label="NFS server" For="nfs-host" Error="@Err("NfsHost")"><input id="nfs-host" class="ui-input mono" @bind="_nfs.Host" disabled="@ro" placeholder="nfs.internal" /></FormField>
+                        <FormField Label="Export path" For="nfs-path" Error="@Err("NfsPath")"><input id="nfs-path" class="ui-input mono" @bind="_nfs.Path" disabled="@ro" placeholder="/BackoraDB" /></FormField>
+                    </div>
+                </section>
+                break;
+
+            case "ssh":
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Default SSH key</h2><p>Used for every server that doesn't have its own key. Add the public key to each server's authorized keys.</p></div>
+                    <div class="doc-section__body">
+                        @if (_ssh is { HasDefaultKey: true })
+                        {
+                            <dl class="ui-props"><dt>Fingerprint</dt><dd class="mono xs">@_ssh.KeyFingerprint</dd><dt>Updated</dt><dd>@(_ssh.UpdatedAt is null ? "—" : Clock.Format(_ssh.UpdatedAt))</dd></dl>
+                            @if (_ssh.DefaultPublicKey is not null)
+                            {
+                                <FormField Label="Public key" For="pub"><textarea id="pub" class="ui-textarea mono" rows="3" readonly>@_ssh.DefaultPublicKey</textarea></FormField>
+                                <div><Btn Size="sm" Icon="copy" OnClick="CopyPublicAsync">Copy public key</Btn></div>
+                            }
+                        }
+                        else { <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div>No default key yet. Servers without their own key can't be reached.</div></div> }
+                        @if (!ro)
+                        {
+                            <details class="ui-disclose" open="@(_ssh?.HasDefaultKey != true)">
+                                <summary><Icon Name="key" Size="14" />@(_ssh?.HasDefaultKey == true ? "Replace the key" : "Add a key")<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                                <div class="ui-disclose__body stack">
+                                    <FormField Label="Private key" For="sshpk" Hint="Never shown again." Error="@Err("PrivateKey")"><textarea id="sshpk" class="ui-textarea ui-textarea--key" rows="4" spellcheck="false" autocomplete="off" @bind="_sshPrivate"></textarea></FormField>
+                                    <FormField Label="Public key" For="sshpub" Hint="Optional. Shown here so you can copy it." Error="@Err("PublicKey")"><input id="sshpub" class="ui-input mono" @bind="_sshPublic" /></FormField>
+                                    <div><Btn Variant="primary" Busy="_saving" Disabled="@string.IsNullOrWhiteSpace(_sshPrivate)" OnClick="SaveSshAsync">Save key</Btn></div>
+                                </div>
+                            </details>
+                        }
+                    </div>
+                </section>
+                break;
+
+            case "email":
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Email</h2><p>How Backora sends alerts by email.</p></div>
+                    <div class="doc-section__body">
+                        <Switch Id="smtp-on" Value="_smtp.Enabled" ValueChanged="v => _smtp.Enabled = v" Disabled="ro" Label="Send email alerts" />
+                        <div class="ui-form-grid">
+                            <FormField Label="Mail server" For="smtp-host" Error="@Err("Host")"><input id="smtp-host" class="ui-input mono" @bind="_smtp.Host" disabled="@ro" /></FormField>
+                            <FormField Label="Port" For="smtp-port" Error="@Err("Port")"><input id="smtp-port" class="ui-input" type="number" @bind="_smtp.Port" disabled="@ro" /></FormField>
+                            <FormField Label="Security" For="smtp-sec" Error="@Err("Security")">
+                                <select id="smtp-sec" class="ui-select" @bind="_smtp.Security" disabled="@ro"><option value="StartTls">STARTTLS (587)</option><option value="SslOnConnect">TLS on connect (465)</option><option value="None">None (internal relay)</option></select>
+                            </FormField>
+                            <FormField Label="Username" For="smtp-user" Hint="Optional." Error="@Err("Username")"><input id="smtp-user" class="ui-input" autocomplete="off" @bind="_smtp.Username" disabled="@ro" /></FormField>
+                            <FormField Label="Password" For="smtp-pw" Hint="@(_smtpDto?.HasPassword == true ? "Leave empty to keep it." : null)" Error="@Err("Password")"><input id="smtp-pw" class="ui-input" type="password" autocomplete="new-password" @bind="_smtp.Password" disabled="@ro" /></FormField>
+                            <FormField Label="From address" For="smtp-from" Error="@Err("FromAddress")"><input id="smtp-from" class="ui-input" type="email" @bind="_smtp.FromAddress" disabled="@ro" /></FormField>
+                            <FormField Label="From name" For="smtp-fromname" Hint="Optional." Error="@Err("FromName")"><input id="smtp-fromname" class="ui-input" @bind="_smtp.FromName" disabled="@ro" /></FormField>
+                        </div>
+                        @if (_smtp.Security == "None") { <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div>Messages and the password travel unencrypted. Use only for an internal relay.</div></div> }
+                        <details class="ui-disclose"><summary><Icon Name="file" Size="14" />Message template<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                            <div class="ui-disclose__body"><textarea class="ui-textarea ui-textarea--code" style="min-height:160px" aria-label="Email template" @bind="_smtp.Template" disabled="@ro"></textarea></div>
+                        </details>
+                        @if (!ro && _smtpDto?.Configured == true)
+                        {
+                            <div class="row-wrap"><input class="ui-input" style="max-width:260px" type="email" placeholder="Send a test to…" aria-label="Test recipient" @bind="_testRecipient" /><Btn Size="sm" Icon="mail" Busy="_testing" OnClick="TestSmtpAsync">Send test</Btn></div>
+                        }
+                    </div>
+                </section>
+                break;
+
+            case "teams":
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Microsoft Teams</h2><p>Post alerts to a Teams channel through an incoming webhook.</p></div>
+                    <div class="doc-section__body">
+                        <Switch Id="teams-on" Value="_teamsEnabled" ValueChanged="v => _teamsEnabled = v" Disabled="ro" Label="Post alerts to Teams" />
+                        <FormField Label="@(_teamsDto?.Configured == true ? "Replace webhook URL" : "Webhook URL")" For="teams-url" Hint="@(_teamsDto?.WebhookHost is { } h ? $"Currently posting to {h}. The URL holds a secret, so it isn't shown." : "The URL holds a secret, so it isn't shown again.")" Error="@Err("WebhookUrl")">
+                            <input id="teams-url" class="ui-input mono" type="password" autocomplete="off" @bind="_teamsUrl" disabled="@ro" />
+                        </FormField>
+                        <details class="ui-disclose"><summary><Icon Name="file" Size="14" />Message template<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                            <div class="ui-disclose__body"><textarea class="ui-textarea ui-textarea--code" style="min-height:160px" aria-label="Teams template" @bind="_teamsTemplate" disabled="@ro"></textarea></div>
+                        </details>
+                        @if (!ro && _teamsDto?.Configured == true) { <div><Btn Size="sm" Icon="message" Busy="_testing" OnClick="TestTeamsAsync">Send test message</Btn></div> }
+                    </div>
+                </section>
+                break;
+
+            default:
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Who hears about it</h2><p>Email addresses that receive alerts.</p></div>
+                    <div class="doc-section__body">
+                        <FormField Label="Recipients" For="alert-to" Hint="One address per line." Error="@Err("Recipients")"><textarea id="alert-to" class="ui-textarea" rows="3" @bind="_recipients" disabled="@ro"></textarea></FormField>
+                    </div>
+                </section>
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>When to send</h2></div>
+                    <div class="doc-section__body">
+                        <Switch Id="n1" Value="_n.BackupFailure" ValueChanged="v => _n.BackupFailure = v" Disabled="ro" Label="A backup fails" />
+                        <Switch Id="n2" Value="_n.OffloadFailure" ValueChanged="v => _n.OffloadFailure = v" Disabled="ro" Label="A copy to storage or a DR site fails" />
+                        <Switch Id="n3" Value="_n.RestoreFailure" ValueChanged="v => _n.RestoreFailure = v" Disabled="ro" Label="A restore fails" />
+                        <Switch Id="n4" Value="_n.RestoreCompleted" ValueChanged="v => _n.RestoreCompleted = v" Disabled="ro" Label="A restore finishes" />
+                        <Switch Id="n5" Value="_n.BackupSuccess" ValueChanged="v => _n.BackupSuccess = v" Disabled="ro" Label="Every successful backup" Description="Can be noisy with frequent schedules." />
+                    </div>
+                </section>
+                break;
+        }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Section { get; set; }
+    [Inject] private BackoraJs Js { get; set; } = default!;
+    private static readonly (string Key, string Label, string Icon)[] Tabs = [("alerts", "Alerts", "bell"), ("email", "Email", "mail"), ("teams", "Teams", "message"), ("storage", "Shared storage", "hard-drive"), ("ssh", "SSH key", "key")];
+    private string Current => Tabs.Any(t => t.Key == Section) ? Section! : "alerts";
+
+    private bool _loaded, _saving, _testing;
+    private string? _error, _generalError, _testRecipient, _sshPrivate, _sshPublic, _recipients, _teamsUrl, _teamsTemplate;
+    private ApiResult? _last;
+    private string? _loadedFor;
+
+    private uint? _nfsVersion;
+    private NfsModel _nfs = new();
+    private SshSettingsDto? _ssh;
+    private SmtpSettingsDto? _smtpDto; private readonly SmtpModel _smtp = new();
+    private TeamsSettingsDto? _teamsDto; private bool _teamsEnabled;
+    private NotificationSettingsDto? _nDto; private readonly NotifyModel _n = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedFor == Current) return;
+        _loadedFor = Current;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loaded = false; _error = null; _generalError = null; _last = null;
+        switch (Current)
+        {
+            case "storage": { var r = await Api.Settings.NfsAsync(); _error = ErrorOf(r); if (r.Value is { } d) { _nfs = new NfsModel { Host = d.NfsHost, Path = d.NfsPath }; _nfsVersion = d.Version; } break; }
+            case "ssh": { var r = await Api.Settings.SshAsync(); _error = ErrorOf(r); _ssh = r.Value; break; }
+            case "email":
+            {
+                var r = await Api.Settings.SmtpAsync(); _error = ErrorOf(r); _smtpDto = r.Value;
+                if (r.Value is { } d) { _smtp.Enabled = d.Enabled; _smtp.Host = d.Host; _smtp.Port = d.Port == 0 ? 587 : d.Port; _smtp.Username = d.Username; _smtp.Password = null; _smtp.FromAddress = d.FromAddress; _smtp.FromName = d.FromName; _smtp.Security = string.IsNullOrEmpty(d.Security) ? "StartTls" : d.Security; _smtp.Template = d.Template ?? d.DefaultTemplate; }
+                break;
+            }
+            case "teams": { var r = await Api.Settings.TeamsAsync(); _error = ErrorOf(r); _teamsDto = r.Value; if (r.Value is { } d) { _teamsEnabled = d.Enabled; _teamsTemplate = d.Template ?? d.DefaultTemplate; _teamsUrl = null; } break; }
+            default:
+            {
+                var r = await Api.Settings.NotificationsAsync(); _error = ErrorOf(r); _nDto = r.Value;
+                if (r.Value is { } d) { _recipients = string.Join('\n', d.Recipients); _n.BackupFailure = d.NotifyOnBackupFailure; _n.OffloadFailure = d.NotifyOnOffloadFailure; _n.RestoreFailure = d.NotifyOnRestoreFailure; _n.RestoreCompleted = d.NotifyOnRestoreCompleted; _n.BackupSuccess = d.NotifyOnBackupSuccess; }
+                break;
+            }
+        }
+        _loaded = _error is null;
+    }
+
+    private string? Err(string f) => _last?.FieldError(f);
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        ApiResult r = Current switch
+        {
+            "storage" => await Api.Settings.UpdateNfsAsync(new NfsSettingsUpdateRequest(_nfs.Host.Trim(), _nfs.Path.Trim(), _nfsVersion)),
+            "email" => await Api.Settings.UpdateSmtpAsync(new SmtpSettingsUpdateRequest(_smtp.Host.Trim(), _smtp.Port, string.IsNullOrWhiteSpace(_smtp.Username) ? null : _smtp.Username.Trim(),
+                string.IsNullOrEmpty(_smtp.Password) ? null : _smtp.Password, _smtp.FromAddress.Trim(), string.IsNullOrWhiteSpace(_smtp.FromName) ? null : _smtp.FromName.Trim(), _smtp.Security,
+                _smtpDto is not null && _smtp.Template == _smtpDto.DefaultTemplate ? null : _smtp.Template, _smtp.Enabled, _smtpDto?.Version)),
+            "teams" => await Api.Settings.UpdateTeamsAsync(new TeamsSettingsUpdateRequest(string.IsNullOrWhiteSpace(_teamsUrl) ? null : _teamsUrl.Trim(),
+                _teamsDto is not null && _teamsTemplate == _teamsDto.DefaultTemplate ? null : _teamsTemplate, _teamsEnabled, _teamsDto?.Version)),
+            _ => await Api.Settings.UpdateNotificationsAsync(new NotificationSettingsUpdateRequest(
+                (_recipients ?? "").Split(['\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
+                _n.BackupFailure, _n.OffloadFailure, _n.RestoreFailure, _n.RestoreCompleted, _n.BackupSuccess, _nDto?.Version)),
+        };
+        _saving = false; _last = r;
+        if (r.Ok) { Toasts.Success("Settings saved"); _loadedFor = null; await OnParametersSetAsync(); return; }
+        if (r.IsConcurrencyConflict) { _generalError = "Someone else changed these settings. Reload to see their changes."; return; }
+        if (r.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = r.Message; return; }
+        Handle(r);
+    }
+
+    private async Task SaveSshAsync()
+    {
+        _saving = true;
+        var r = await Api.Settings.UpdateSshAsync(new SshSettingsUpdateRequest(_sshPrivate!.Trim() + "\n", string.IsNullOrWhiteSpace(_sshPublic) ? null : _sshPublic.Trim()));
+        _saving = false; _last = r;
+        if (r.Ok) { _sshPrivate = null; _sshPublic = null; Toasts.Success("Default key saved"); await LoadAsync(); return; }
+        if (r.Outcome is ApiOutcome.ValidationFailed) { _generalError = r.Message; return; }
+        Handle(r);
+    }
+
+    private async Task CopyPublicAsync() { if (_ssh?.DefaultPublicKey is { } k) { await Js.InvokeVoidAsync("copyText", k); Toasts.Success("Public key copied"); } }
+
+    private async Task TestSmtpAsync()
+    {
+        _testing = true;
+        var r = await Api.Settings.TestSmtpAsync(new SendTestNotificationRequest(string.IsNullOrWhiteSpace(_testRecipient) ? null : _testRecipient.Trim()));
+        _testing = false;
+        Handle(r, "Test email sent", r.Value?.Message);
+    }
+
+    private async Task TestTeamsAsync()
+    {
+        _testing = true;
+        var r = await Api.Settings.TestTeamsAsync();
+        _testing = false;
+        Handle(r, "Test message posted", r.Value?.Message);
+    }
+
+    private sealed class NfsModel { public string Host { get; set; } = ""; public string Path { get; set; } = ""; }
+    private sealed class SmtpModel { public bool Enabled { get; set; } public string Host { get; set; } = ""; public int Port { get; set; } = 587; public string? Username { get; set; } public string? Password { get; set; } public string FromAddress { get; set; } = ""; public string? FromName { get; set; } public string Security { get; set; } = "StartTls"; public string? Template { get; set; } }
+    private sealed class NotifyModel { public bool BackupFailure { get; set; } public bool OffloadFailure { get; set; } public bool RestoreFailure { get; set; } public bool RestoreCompleted { get; set; } public bool BackupSuccess { get; set; } }
+}

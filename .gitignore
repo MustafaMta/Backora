@@ -1,0 +1,44 @@
+# OS / editors
+.DS_Store
+.idea/
+.vs/
+.vscode/
+*.user
+*.swp
+
+# .NET build output and test results
+bin/
+obj/
+TestResults/
+
+# Local secrets and machine state (never commit)
+backend/.local/
+backend/deploy/.env
+backend/deploy/.secrets/
+**/dp-keys/
+*.pfx
+*.key
+*.pem
+
+deploy/production/env/
+
+# ── Never commit data or credentials ──
+# Database dumps
+*.sql
+!backend/tests/**/*.sql
+*.sql.gz
+*.dump
+*.bak
+# Local production configuration and secrets
+deploy/production/.env
+deploy/production/env/
+deploy/production/secrets/*
+!deploy/production/secrets/README.md
+deploy/production/certs/*
+!deploy/production/certs/README.md
+# Import reports list real server, job and user names
+deploy/production/import-reports/
+# Local machine state
+backend/.local/
+*.local.txt
+.local_vuln.txt

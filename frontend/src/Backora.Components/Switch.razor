@@ -1,0 +1,14 @@
+<label class="ui-toggle">
+    <input type="checkbox" id="@Id" role="switch" checked="@Value" aria-checked="@(Value ? "true" : "false")" disabled="@Disabled" @onchange="Change" />
+    <span class="ui-toggle__track" aria-hidden="true"></span>
+    @if (Label is not null) { <span class="ui-toggle__text"><span>@Label</span>@if (Description is not null) { <small>@Description</small> }</span> }
+</label>
+@code {
+    [Parameter] public string? Id { get; set; }
+    [Parameter] public bool Value { get; set; }
+    [Parameter] public EventCallback<bool> ValueChanged { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Description { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    private async Task Change(ChangeEventArgs e) { Value = e.Value is true; await ValueChanged.InvokeAsync(Value); }
+}

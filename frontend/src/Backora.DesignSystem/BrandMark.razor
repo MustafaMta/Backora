@@ -1,0 +1,8 @@
+@* Backora logo symbol: the ziggurat-and-crown emblem from the original Backora logo, refined and faceted in sapphire
+   (wwwroot/icons/backora-mark.svg). Decorative: the name is always beside it. *@
+<img class="ui-brand @Class" src="@Assets["_content/Backora.DesignSystem/icons/backora-mark.svg"]" width="@Size" height="@Size" alt="" draggable="false" />
+
+@code {
+    [Parameter] public int Size { get; set; } = 30;
+    [Parameter] public string? Class { get; set; }
+}

@@ -1,0 +1,513 @@
+@page "/jobs/new"
+@page "/jobs/{Id:long}/edit"
+<PageTitle>@(IsEdit ? "Edit backup job" : "Create backup") · Backora</PageTitle>
+
+<PageHead Title="@(IsEdit ? "Edit backup job" : "Create backup")" BackHref="@(IsEdit ? $"/jobs/{Id}" : "/jobs")" BackLabel="@(IsEdit ? _m.Name : "Backup jobs")" />
+
+@if (!Can(Permissions.JobsWrite))
+{
+    <div class="app-page"><Empty Title="You can't create backups" Message="Ask an administrator for the Backup Administrator role." /></div>
+}
+else if (_loadError is not null)
+{
+    <div class="app-page"><Empty Error="true" Title="We couldn't load what this form needs" Message="@_loadError"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty></div>
+}
+else if (_servers is null || _templates is null || _dests is null) { <Loading Text="Getting things ready…" /> }
+else
+{
+    <div class="app-page create">
+        <div class="create__main">
+            <section class="create-card" aria-labelledby="step-title">
+                <div class="create-card__progress"><Steps Items="StepItems" Current="_step" MaxReachable="_max" Label="Backup setup" OnSelect="GoTo" /></div>
+                <div class="create-card__head">
+                    <div class="create-card__eyebrow">Step @_step of 5</div>
+                    <h2 id="step-title" class="create-card__title">@StepTitle</h2>
+                    <p class="create-card__lead">@StepLead</p>
+                </div>
+                <div class="create-card__body" @key="_step">
+                    @switch (_step)
+                    {
+                        case 1:
+                            <div class="cs">
+                                <FormField Label="Job name" For="name" Hint="Suggested from the server and method. Shown everywhere this job appears." Error="@Err("Name")">
+                                    <input id="name" class="ui-input" value="@_m.Name" @oninput="e => { _m.Name = e.Value?.ToString() ?? string.Empty; _nameTouched = true; }" maxlength="200" />
+                                </FormField>
+                                <FormField Label="Notes" For="desc" Optional="true"><input id="desc" class="ui-input" @bind="_m.Description" placeholder="For example: who owns this database" /></FormField>
+                            </div>
+                            <div class="cs">
+                                <div class="cs__head"><h3 class="cs__title">Server</h3><span class="cs__hint">@if (Can(Permissions.ServersWrite)) { <a class="link" href="/servers/new">Add a server</a> }</span></div>
+                                @if (_servers.Count == 0) { <div class="ui-callout ui-callout--warn"><Icon Name="server" Size="15" /><div>No servers yet. <a href="/servers/new">Add a server</a> first.</div></div> }
+                                @if (_servers.Count > 0)
+                                {
+                                    <SearchSelect TItem="ServerDto" Id="server" Items="_servers" Selected="SelServer" OnSelect="PickServer" Icon="server"
+                                                  Text="sv => sv.Name" Sub="@(sv => $"{sv.Host} · {Ui.Plural(sv.JobCount, "backup", "backups")}")" Key="sv => sv.Id"
+                                                  Placeholder="Choose the server to protect" SearchPlaceholder="Search by name or address…">
+                                        <Trailing Context="sv">@if (sv.HostKeyTrustedAt is null) { <span class="ui-badge ui-badge--warn">Not verified</span> } else { <span class="ui-badge ui-badge--ok">Verified</span> }</Trailing>
+                                    </SearchSelect>
+                                }
+                                @if (Err("ServerId") is { } se) { <span class="ui-error"><Icon Name="alert" Size="12" />@se</span> }
+                            </div>
+                            <div class="cs">
+                                <div class="cs__head"><h3 class="cs__title">Backup method</h3><span class="cs__hint">How the data is captured</span></div>
+                                <div class="ui-tiles" role="radiogroup" aria-label="Backup method">
+                                    @foreach (var t in OrderedTemplates)
+                                    {
+                                        <Tile Title="@t.Name" Subtitle="@(t.Description ?? Ui.EngineLabel(t.Category))" Icon="@Ui.Engine(t.Category)" GlyphClass="@Ui.EngineGlyph(t.Category)" Tag="@(Suggested(t) ? "Suggested" : null)" Tooltip="@t.Description" Selected="_m.TemplateId == t.Id" OnSelect="() => PickTemplate(t)" />
+                                    }
+                                </div>
+                                @if (_templates.Count == 0) { <div class="ui-callout ui-callout--warn"><Icon Name="template" Size="15" /><div>No backup methods exist yet. An administrator adds them under Templates.</div></div> }
+                                @if (Err("TemplateId") is { } te) { <span class="ui-error"><Icon Name="alert" Size="12" />@te</span> }
+                            </div>
+                            break;
+
+                        case 2:
+                            <div class="cs">
+                                <div class="cs__head"><h3 class="cs__title">Primary storage</h3><span class="cs__hint">@if (Can(Permissions.StorageWrite)) { <a class="link" href="/storage/new">Add storage</a> }</span></div>
+                                <div class="ui-tiles" role="radiogroup" aria-label="Primary storage">
+                                    @foreach (var d in _dests)
+                                    {
+                                        <Tile Title="@d.Name" Subtitle="@SiteLine(d)" Icon="s3" GlyphClass="ui-glyph--accent" Tag="@(MostUsedPrimary == d.Id ? "Most used" : null)" Selected="_m.DestinationId == d.Id" Disabled="@(!Usable(d) && _m.DestinationId != d.Id)" Tooltip="@UnusableReason(d)" OnSelect="() => PickPrimary(d.Id)" />
+                                    }
+                                    <Tile Title="Staging share only" Subtitle="Not off-site. Not recommended." Icon="hard-drive" Selected="_m.DestinationId == 0" OnSelect="() => PickPrimary(0)" />
+                                </div>
+                                @if (_dests.Count == 0) { <p class="xs muted">No off-site storage yet. <a class="link" href="/storage/new">Add storage</a> so this backup survives losing the building.</p> }
+                                @if (_dests.Any(d => !Usable(d))) { <p class="xs muted">Unavailable sites are paused, or need encryption tooling the execution host doesn't have.</p> }
+                            </div>
+                            <div class="cs">
+                                <div class="cs__head"><h3 class="cs__title">Keep copies for</h3><span class="cs__hint">The newest @_m.MinRecoveryPointsToKeep always kept</span></div>
+                                <div class="ui-segment" role="group" aria-label="Retention">
+                                    @foreach (var r in Retention)
+                                    {
+                                        <button type="button" aria-pressed="@(_m.RetentionDays == r.Days && !_customRetention ? "true" : "false")" @onclick="() => { _m.RetentionDays = r.Days; _customRetention = false; }">@r.Label</button>
+                                    }
+                                    <button type="button" aria-pressed="@(_customRetention ? "true" : "false")" @onclick="() => _customRetention = true">Custom</button>
+                                </div>
+                                @if (_customRetention)
+                                {
+                                    <FormField Label="Days" For="ret" Error="@Err("RetentionDays")" Hint="Use 0.5 for 12 hours.">
+                                        <div class="ui-input-group" style="max-width:220px"><input id="ret" class="ui-input" type="number" min="0.04" step="0.5" value="@_m.RetentionDays.ToString(CultureInfo.InvariantCulture)" @onchange="e => _m.RetentionDays = decimal.TryParse(e.Value?.ToString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var v) ? v : _m.RetentionDays" /><span class="ui-input-group__addon">days</span></div>
+                                    </FormField>
+                                }
+                            </div>
+                            <details class="ui-disclose">
+                                <summary><Icon Name="settings" Size="14" />Advanced storage settings<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                                <div class="ui-disclose__body stack">
+                                    <FormField Label="Always keep at least" For="minpts" Error="@Err("MinRecoveryPointsToKeep")" Hint="Newest verified copies kept on each site, whatever their age.">
+                                        <div class="ui-input-group" style="max-width:220px"><input id="minpts" class="ui-input" type="number" min="1" @bind="_m.MinRecoveryPointsToKeep" /><span class="ui-input-group__addon">copies</span></div>
+                                    </FormField>
+                                    @if (_m.DestinationId != 0) { <Switch Id="keeplocal" Value="_m.KeepLocalCopy" ValueChanged="v => _m.KeepLocalCopy = v" Label="Keep the staging copy after upload" Description="Uses more shared storage." /> }
+                                </div>
+                            </details>
+                            break;
+
+                        case 3:
+                            <div class="cs">
+                                <div class="cs__head"><h3 class="cs__title">Frequency</h3></div>
+                                <div class="ui-segment" role="group" aria-label="Frequency">
+                                    @foreach (var p in Presets) { <button type="button" aria-pressed="@(_preset == p.Key ? "true" : "false")" @onclick="() => PickPresetAsync(p.Key)">@p.Label</button> }
+                                </div>
+                                @if (_preset != "manual")
+                                {
+                                    <div class="field-row">
+                                        @if (_preset == "weekly")
+                                        {
+                                            <FormField Label="Day" For="dow"><select id="dow" class="ui-select" value="@_dow" @onchange="OnDayChangedAsync">@for (var d = 0; d < 7; d++) { <option value="@d">@(((DayOfWeek)d).ToString())</option> }</select></FormField>
+                                        }
+                                        @if (_preset is "daily" or "weekly")
+                                        {
+                                            <FormField Label="At" For="at"><input id="at" class="ui-input" type="time" value="@AtText" @onchange="OnTimeChangedAsync" /></FormField>
+                                        }
+                                        @if (_preset == "custom")
+                                        {
+                                            <FormField Label="Cron expression" For="cron" Error="@(Err("CronExpression") ?? (_preview?.Valid == false ? _preview.Error : null))"><input id="cron" class="ui-input mono" value="@_m.Cron" @onchange="async e => { _m.Cron = e.Value?.ToString(); await PreviewAsync(); }" placeholder="0 2 * * *" /></FormField>
+                                        }
+                                        <FormField Label="Time zone" For="tz" Error="@Err("TimeZone")">
+                                            <select id="tz" class="ui-select" value="@_m.TimeZone" @onchange="OnZoneChangedAsync">@foreach (var z in TimeZones.Iana) { <option value="@z">@z</option> }</select>
+                                        </FormField>
+                                    </div>
+                                    @if (_preview is { Valid: true } pv)
+                                    {
+                                        <div class="result"><Icon Name="calendar-clock" Size="16" Class="t-accent" /><div><b>@pv.Description</b><div class="next-runs">@foreach (var o in pv.NextOccurrences.Take(3)) { <span>@Clock.Format(o)</span> }</div></div></div>
+                                    }
+                                }
+                                else { <div class="result"><Icon Name="info" Size="16" Class="t-accent" /><div><b>Runs only when started</b><small>Use “Run backup” on the job page whenever you need a copy.</small></div></div> }
+                            </div>
+                            <details class="ui-disclose">
+                                <summary><Icon Name="settings" Size="14" />Advanced run settings<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                                <div class="ui-disclose__body stack">
+                                    <div class="field-row">
+                                        <FormField Label="Stop after" For="timeout" Hint="A backup still reading and writing data gets more time, up to 4× this." Error="@Err("TimeoutMinutes")"><div class="ui-input-group"><input id="timeout" class="ui-input" type="number" min="1" @bind="_m.TimeoutMinutes" /><span class="ui-input-group__addon">minutes</span></div></FormField>
+                                        <FormField Label="Attempts" For="attempts" Error="@Err("MaxAttempts")"><input id="attempts" class="ui-input" type="number" min="1" max="10" @bind="_m.MaxAttempts" /></FormField>
+                                    </div>
+                                    <Switch Id="missed" Value="_m.MissedRunPolicy == MissedRunPolicyDto.RunOnceWithinGrace" ValueChanged="v => _m.MissedRunPolicy = v ? MissedRunPolicyDto.RunOnceWithinGrace : MissedRunPolicyDto.Skip" Label="Catch up on a missed run" Description="@($"If Backora was down at the scheduled time, run once within {_m.MissedRunGraceMinutes} minutes.")" />
+                                    <Switch Id="reqart" Value="_m.RequireArtifacts" ValueChanged="v => _m.RequireArtifacts = v" Label="Fail if no backup files are produced" Description="Recommended. Catches scripts that exit cleanly without writing data." />
+                                </div>
+                            </details>
+                            break;
+
+                        case 4:
+                            @if (_m.DestinationId == 0)
+                            {
+                                <div class="ui-callout ui-callout--info"><Icon Name="info" Size="15" /><div>DR copies are made from the off-site copy. <button type="button" class="ui-btn ui-btn--sm" @onclick="() => GoTo(2)">Choose primary storage</button></div></div>
+                            }
+                            else
+                            {
+                                <div class="cs">
+                                    <div class="pinned">
+                                        <span class="ui-tile__icon"><Icon Name="s3" Size="18" /></span>
+                                        <span><b>@SelPrimary?.Name</b><small>Primary copy · every backup is verified here first</small></span>
+                                        <span class="ui-badge ui-badge--accent">Primary</span>
+                                    </div>
+                                </div>
+                                <div class="cs">
+                                    <div class="cs__head"><h3 class="cs__title">Copy to these DR sites</h3><span class="cs__hint">@(_m.ReplicaIds.Count == 0 ? "Optional" : Ui.Plural(_m.ReplicaIds.Count, "site selected", "sites selected"))</span></div>
+                                    @if (DrCandidates.Count == 0)
+                                    {
+                                        <Empty Compact="true" Art="dr" Title="No other storage to use as a DR site" Message="Add storage in another region or with another provider.">
+                                            <Actions>@if (Can(Permissions.StorageWrite)) { <Btn Size="sm" Href="/storage/new?purpose=dr" Icon="plus">Add a DR site</Btn> }</Actions>
+                                        </Empty>
+                                    }
+                                    else
+                                    {
+                                        <div class="ui-tiles" role="group" aria-label="DR sites">
+                                            @foreach (var d in DrCandidates)
+                                            {
+                                                var on = _m.ReplicaIds.Contains(d.Id);
+                                                <Tile Multi="true" Title="@d.Name" Subtitle="@SiteLine(d)" Icon="topology" GlyphClass="ui-glyph--flow" Selected="on" Disabled="@(!Usable(d) && !on)" Tooltip="@UnusableReason(d)" OnSelect="() => ToggleReplica(d.Id)" />
+                                            }
+                                        </div>
+                                        <div class="route" aria-label="Copy route">
+                                            <span class="route__node"><Icon Name="database" Size="12" />@(SelServer?.Name ?? "Source")</span><Icon Name="arrow-right" Size="12" Class="route__arrow" />
+                                            <span class="route__node route__node--primary"><Icon Name="s3" Size="12" />@SelPrimary?.Name</span>
+                                            @foreach (var r in SelReplicas) { <Icon Name="arrow-right" Size="12" Class="route__arrow" /><span class="route__node route__node--dr"><Icon Name="topology" Size="12" />@r.Name</span> }
+                                        </div>
+                                        <p class="xs muted">Each site gets its own copy, status and retries. Retention applies to every site.</p>
+                                    }
+                                </div>
+                            }
+                            break;
+
+                        default:
+                            @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+                            <div class="review">
+                                <ReviewRow Icon="@Ui.Engine(SelTemplate?.Category)" Label="Protects" Value="@($"{SelServer?.Name} · {SelTemplate?.Name}")" Sub="@Ui.EngineLabel(SelTemplate?.Category)" OnChange="() => GoTo(1)" />
+                                <ReviewRow Icon="s3" Label="Primary storage" Value="@(SelPrimary?.Name ?? "Staging share only")" Sub="@($"Keeps copies {Ui.Keep(_m.RetentionDays)}, newest {_m.MinRecoveryPointsToKeep} always")" OnChange="() => GoTo(2)" />
+                                <ReviewRow Icon="calendar-clock" Label="Schedule" Value="@ScheduleText" OnChange="() => GoTo(3)" />
+                                <ReviewRow Icon="topology" Label="Disaster recovery" Value="@(SelReplicas.Count == 0 ? "No DR site" : string.Join(", ", SelReplicas.Select(r => r.Name)))" Sub="@(SelReplicas.Count == 0 ? "One off-site copy" : $"{1 + SelReplicas.Count} independent off-site copies")" OnChange="() => GoTo(4)" />
+                                <ReviewRow Icon="lock" Label="Encryption" Value="@EncryptionSummary" Sub="@(AnyEncrypted ? "Encrypted sites need your private key to restore" : null)" />
+                            </div>
+                            <Switch Id="active" Value="_m.Active" ValueChanged="v => _m.Active = v" Label="@(IsEdit ? "Backups are active" : "Start protecting right away")" Description="@(_m.Active ? "The first backup runs on the schedule above." : "Saved as paused. Resume it any time.")" />
+                            <details class="ui-disclose">
+                                <summary><Icon Name="terminal" Size="14" />Technical settings<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                                <div class="ui-disclose__body">
+                                    <dl class="ui-props">
+                                        <dt>Server address</dt><dd class="mono xs">@SelServer?.Host</dd>
+                                        @if (_m.Cron is not null) { <dt>Cron</dt><dd class="mono xs">@_m.Cron (@_m.TimeZone)</dd> }
+                                        <dt>Stops after</dt><dd>@_m.TimeoutMinutes minutes · @Ui.Plural(_m.MaxAttempts, "attempt", "attempts")</dd>
+                                        <dt>Missed runs</dt><dd>@(_m.MissedRunPolicy == MissedRunPolicyDto.Skip ? "Skipped" : "Caught up")</dd>
+                                        <dt>Staging copy</dt><dd>@(_m.KeepLocalCopy ? "Kept" : "Removed after upload")</dd>
+                                    </dl>
+                                </div>
+                            </details>
+                            break;
+                    }
+                </div>
+                <div class="create-card__foot">
+                    @if (_step > 1) { <Btn Variant="ghost" Icon="arrow-left" OnClick="() => GoTo(_step - 1)">Back</Btn> } else { <Btn Variant="ghost" Href="@(IsEdit ? $"/jobs/{Id}" : "/jobs")">Cancel</Btn> }
+                    <span class="grow">@FootHint</span>
+                    @if (_step < 5) { <Btn Variant="primary" TrailingIcon="arrow-right" Disabled="@(!CanContinue)" OnClick="NextAsync">Continue</Btn> }
+                    else { <Btn Variant="primary" Icon="check" Busy="_saving" OnClick="SaveAsync">@(IsEdit ? "Save changes" : "Create backup job")</Btn> }
+                </div>
+            </section>
+        </div>
+
+        <aside class="create__aside" aria-label="Summary">
+            <div class="plan">
+                <div class="plan__head"><Icon Name="shield-check" Size="15" Class="t-accent" /><h3>Protection plan</h3>@if (_m.Active) { <span class="ui-badge ui-badge--ok">Active</span> } else { <span class="ui-badge">Paused</span> }</div>
+                <div class="plan__rows">
+                    <PlanRow Icon="@(SelTemplate is null ? "database" : Ui.Engine(SelTemplate.Category))" Glyph="@Ui.EngineGlyph(SelTemplate?.Category)" Label="Protects" Value="@(SelServer is null ? null : SelServer.Name)" Sub="@SelTemplate?.Name" />
+                    <PlanRow Icon="s3" Glyph="ui-glyph--accent" Label="Primary copy" Value="@(_step < 2 && !IsEdit ? null : SelPrimary?.Name ?? "Staging share only")" Sub="@(_step < 2 && !IsEdit ? null : $"Kept {Ui.Keep(_m.RetentionDays)}")" />
+                    <PlanRow Icon="calendar-clock" Label="Schedule" Value="@(_step < 3 && !IsEdit ? null : ScheduleText)" Sub="@(_preset == "manual" || (_step < 3 && !IsEdit) ? null : _m.TimeZone)" />
+                    <PlanRow Icon="topology" Glyph="ui-glyph--flow" Label="DR copies" Value="@(_step < 4 && !IsEdit ? null : SelReplicas.Count == 0 ? "None" : string.Join(", ", SelReplicas.Select(r => r.Name)))" />
+                </div>
+                <div class="plan__foot"><Icon Name="verified" Size="14" /><span>Every backup is verified by checksum before it counts as a recovery point.</span></div>
+            </div>
+            @if (_step == 5 || _age == false)
+            {
+                <div class="plan-note">
+                    <h3><Icon Name="info" Size="14" />Good to know</h3>
+                    <ul>
+                        @if (_age == false) { <li>The execution host has no encryption tool, so encrypted sites can't be used until it's installed.</li> }
+                        @if (AnyEncrypted) { <li>Keep the private key for encrypted sites safe. Backora never stores it.</li> }
+                        <li>You can change any of this later from the job page.</li>
+                    </ul>
+                </div>
+            }
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    [SupplyParameterFromQuery(Name = "step")] public int? StartStep { get; set; }
+    private bool IsEdit => Id is not null;
+
+    private List<ServerDto>? _servers;
+    private List<TemplateSummaryDto>? _templates;
+    private List<S3DestinationDto>? _dests;
+    private string? _loadError, _generalError;
+    private ApiResult? _lastResult;
+    private readonly WizardModel _m = new();
+    private int _step = 1, _max = 1;
+    private bool _saving, _nameTouched, _customRetention;
+    private string _preset = "daily";
+    private TimeOnly _at = new(2, 0);
+    private int _dow;
+    private SchedulePreviewResponse? _preview;
+
+    [SupplyParameterFromQuery(Name = "serverId")] public long? ServerIdParam { get; set; }
+    [SupplyParameterFromQuery(Name = "engine")] public string? EngineParam { get; set; }
+    private bool? _age;
+    private Dictionary<long, int> _primaryUse = [];
+
+    private static readonly IReadOnlyList<Steps.Item> StepItems =
+        [new("Source"), new("Storage"), new("Schedule"), new("Disaster recovery"), new("Review")];
+
+    private string StepTitle => _step switch { 1 => "What do you want to protect?", 2 => "Where should copies be kept?", 3 => "When should it run?", 4 => "Add disaster recovery sites", _ => IsEdit ? "Review and save" : "Review and create" };
+    private string StepLead => _step switch
+    {
+        1 => "Choose the server and how its data is captured.",
+        2 => "Each backup is verified, then uploaded here as the primary copy.",
+        3 => "Pick a rhythm. Missed runs are handled for you.",
+        4 => "Each site you pick receives its own independent copy of every verified backup.",
+        _ => "Check the plan. Nothing runs until you confirm.",
+    };
+    private string FootHint => _step switch
+    {
+        1 when SelServer is null => "Choose a server to continue",
+        1 when SelTemplate is null => "Choose a backup method to continue",
+        5 => _m.Active ? "Protection starts as soon as you confirm" : "Saved as paused",
+        _ => "",
+    };
+
+    private IEnumerable<TemplateSummaryDto> OrderedTemplates => _templates!.OrderByDescending(Suggested).ThenBy(t => t.Name);
+    private bool Suggested(TemplateSummaryDto t) => EngineParam is { Length: > 0 } e && Ui.Engine(t.Category) == e;
+    private long? MostUsedPrimary => _primaryUse.Count == 0 ? null : _primaryUse.MaxBy(kv => kv.Value).Key;
+    private bool Usable(S3DestinationDto d) => d.IsEnabled && !(Ui.Encrypted(d) && _age == false);
+    private string? UnusableReason(S3DestinationDto d) => !d.IsEnabled ? "Paused. Turn it back on in Storage & DR." : Ui.Encrypted(d) && _age == false ? "Encrypted, but the execution host has no encryption tool." : null;
+    private static string SiteLine(S3DestinationDto d)
+    {
+        var state = !d.IsEnabled ? "paused" : d.LastConnectionTestSucceeded == false ? "can't connect" : d.RecoveryPointCount > 0 || d.LastConnectionTestSucceeded == true ? "available" : "not tested";
+        return $"{Backora.Web.Components.Pages.Storage.StorageList.ProviderOf(d)} · {(Ui.Encrypted(d) ? "encrypted" : "not encrypted")} · {state}";
+    }
+    private bool AnyEncrypted => (SelPrimary is { } p && Ui.Encrypted(p)) || SelReplicas.Any(Ui.Encrypted);
+    private string EncryptionSummary => SelPrimary is null ? "Not applicable" : AnyEncrypted ? (SelReplicas.All(Ui.Encrypted) && Ui.Encrypted(SelPrimary) ? "Every copy is encrypted" : "Some copies are encrypted") : "Not encrypted";
+    private static readonly (decimal Days, string Label)[] Retention = [(7, "7 days"), (14, "14 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
+    private static readonly (string Key, string Label)[] Presets = [("daily", "Daily"), ("6h", "Every 6 hours"), ("hourly", "Hourly"), ("weekly", "Weekly"), ("manual", "Manual"), ("custom", "Custom")];
+
+    private ServerDto? SelServer => _servers?.FirstOrDefault(s => s.Id == _m.ServerId);
+    private TemplateSummaryDto? SelTemplate => _templates?.FirstOrDefault(t => t.Id == _m.TemplateId);
+    private S3DestinationDto? SelPrimary => _dests?.FirstOrDefault(d => d.Id == _m.DestinationId);
+    private List<S3DestinationDto> DrCandidates => _dests?.Where(d => d.Id != _m.DestinationId).ToList() ?? [];
+    private List<S3DestinationDto> SelReplicas => DrCandidates.Where(d => _m.ReplicaIds.Contains(d.Id)).ToList();
+    private string ScheduleText => _preset == "manual" ? "Manual only" : _preview is { Valid: true } p ? p.Description : _m.Cron ?? "—";
+
+    private bool CanContinue => _step switch
+    {
+        1 => _m.ServerId > 0 && _m.TemplateId > 0 && !string.IsNullOrWhiteSpace(_m.Name),
+        2 => _m.RetentionDays > 0,
+        3 => _preset == "manual" || _preview?.Valid != false,
+        _ => true,
+    };
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loadError = null;
+        var servers = Api.Servers.ListAsync(null, 1, 200, "name");
+        var templates = Api.Templates.ListAsync();
+        var dests = Api.Storage.ListAsync();
+        var job = IsEdit ? Api.Jobs.GetAsync(Id!.Value) : null;
+        var host = Can(Permissions.SettingsRead) ? Api.Settings.ExecutionHostAsync(PageToken) : null;
+        var jobs = Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name");
+        var s = await servers; var t = await templates; var d = await dests;
+        if (host is not null && (await host).Value?.Probe is { } probe)
+            _age = probe.Tools.FirstOrDefault(x => string.Equals(x.Name, "age", StringComparison.OrdinalIgnoreCase)) is { } tool ? tool.Version is not null : null;
+        _primaryUse = (await jobs).Value?.Items.Where(j => j.S3DestinationId is not null).GroupBy(j => j.S3DestinationId!.Value).ToDictionary(g => g.Key, g => g.Count()) ?? [];
+        _loadError = ErrorOf(s) ?? ErrorOf(t) ?? ErrorOf(d);
+        if (_loadError is not null) return;
+        _servers = s.Value!.Items.ToList(); _templates = t.Value!; _dests = d.Value!;
+        if (job is not null)
+        {
+            var j = await job;
+            _loadError = ErrorOf(j);
+            if (j.Value is null) { _loadError ??= "This backup no longer exists."; return; }
+            _m.From(j.Value); _nameTouched = true;
+            _customRetention = !Retention.Any(r => r.Days == _m.RetentionDays);
+            _preset = DetectPreset(_m.Cron);
+            _max = 5; _step = Math.Clamp(StartStep ?? 1, 1, 5);
+        }
+        else
+        {
+            _m.TimeZone = Clock.Zone == TimeZoneInfo.Utc ? "UTC" : Clock.Zone.Id;
+            if (ServerIdParam is long sid && _servers.FirstOrDefault(x => x.Id == sid) is { } chosen) PickServer(chosen);
+            else if (_servers.Count == 1) PickServer(_servers[0]);
+            var suggested = _templates.Where(Suggested).ToList();
+            if (suggested.Count == 1) PickTemplate(suggested[0]);
+            else if (_templates.Count == 1) PickTemplate(_templates[0]);
+            // Default primary: the site most jobs already use, otherwise the first usable one.
+            var primary = (MostUsedPrimary is long mu ? _dests.FirstOrDefault(x => x.Id == mu && Usable(x)) : null) ?? _dests.FirstOrDefault(Usable);
+            if (primary is not null) _m.DestinationId = primary.Id;
+            await ApplyPresetAsync();
+        }
+        await PreviewAsync();
+    }
+
+    private string DetectPreset(string? cron)
+    {
+        if (string.IsNullOrWhiteSpace(cron)) return "manual";
+        var p = cron.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length != 5) return "custom";
+        if (cron.Trim() == "0 * * * *") return "hourly";
+        if (cron.Trim() == "0 */6 * * *") return "6h";
+        if (int.TryParse(p[0], out var mi) && int.TryParse(p[1], out var h) && mi is >= 0 and < 60 && h is >= 0 and < 24 && p[2] == "*" && p[3] == "*")
+        {
+            _at = new TimeOnly(h, mi);
+            if (p[4] == "*") return "daily";
+            if (int.TryParse(p[4], out var dow) && dow is >= 0 and < 7) { _dow = dow; return "weekly"; }
+        }
+        return "custom";
+    }
+
+    private void PickServer(ServerDto s) { _m.ServerId = s.Id; SuggestName(); }
+    private void PickTemplate(TemplateSummaryDto t) { _m.TemplateId = t.Id; SuggestName(); }
+    private void SuggestName()
+    {
+        if (_nameTouched || SelServer is null || SelTemplate is null) return;
+        _m.Name = $"{SelTemplate.Name} — {SelServer.Name}";
+    }
+    private void PickPrimary(long id) { _m.DestinationId = id; _m.ReplicaIds.Remove(id); }
+    private void ToggleReplica(long id) { if (!_m.ReplicaIds.Remove(id)) _m.ReplicaIds.Add(id); }
+
+    private string AtText => _at.ToString("HH:mm", CultureInfo.InvariantCulture);
+    private async Task OnTimeChangedAsync(ChangeEventArgs e)
+    {
+        if (TimeOnly.TryParse(e.Value?.ToString(), CultureInfo.InvariantCulture, out var t)) { _at = t; await ApplyPresetAsync(); }
+    }
+    private async Task OnZoneChangedAsync(ChangeEventArgs e) { _m.TimeZone = e.Value?.ToString() ?? "UTC"; await PreviewAsync(); }
+    private async Task OnDayChangedAsync(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var d)) { _dow = d; await ApplyPresetAsync(); }
+    }
+
+    private async Task PickPresetAsync(string key) { _preset = key; await ApplyPresetAsync(); }
+    private async Task ApplyPresetAsync()
+    {
+        _m.Cron = _preset switch
+        {
+            "daily" => $"{_at.Minute} {_at.Hour} * * *",
+            "weekly" => $"{_at.Minute} {_at.Hour} * * {_dow}",
+            "6h" => "0 */6 * * *",
+            "hourly" => "0 * * * *",
+            "manual" => null,
+            _ => _m.Cron ?? "0 2 * * *",
+        };
+        await PreviewAsync();
+    }
+
+    private async Task PreviewAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_m.Cron)) { _preview = null; return; }
+        var r = await Api.Jobs.PreviewScheduleAsync(new SchedulePreviewRequest(_m.Cron, _m.TimeZone), PageToken);
+        _preview = r.Ok ? r.Value : null;
+    }
+
+    private void GoTo(int n) { if (n <= _max) _step = n; }
+    private Task NextAsync()
+    {
+        if (!CanContinue) return Task.CompletedTask;
+        _step++; _max = Math.Max(_max, _step);
+        return Task.CompletedTask;
+    }
+
+    private string? Err(string field) => _lastResult?.FieldError(field);
+
+    private static readonly Dictionary<string, int> FieldStep = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Name"] = 1, ["Description"] = 1, ["ServerId"] = 1, ["TemplateId"] = 1,
+        ["S3DestinationId"] = 2, ["RetentionDays"] = 2, ["MinRecoveryPointsToKeep"] = 2, ["KeepLocalCopy"] = 2,
+        ["CronExpression"] = 3, ["TimeZone"] = 3, ["TimeoutMinutes"] = 3, ["MaxAttempts"] = 3, ["MissedRunGraceMinutes"] = 3,
+        ["ReplicaDestinationIds"] = 4,
+    };
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        var req = _m.ToRequest();
+        ApiResult result; long? newId = null;
+        if (IsEdit) result = await Api.Jobs.UpdateAsync(Id!.Value, req);
+        else { var r = await Api.Jobs.CreateAsync(req); result = r; newId = r.Value?.Id; }
+        _saving = false; _lastResult = result;
+        if (result.Ok)
+        {
+            Toasts.Success(IsEdit ? "Changes saved" : "Backup created", _m.Active ? "It will run on its schedule." : "It's paused until you resume it.");
+            Nav.NavigateTo($"/jobs/{newId ?? Id}");
+            return;
+        }
+        if (result.Outcome == ApiOutcome.ValidationFailed && result.Problem?.Errors.Count > 0)
+        {
+            var first = result.Problem.Errors.Keys.Select(k => k.StartsWith("settings.", StringComparison.OrdinalIgnoreCase) ? 1 : FieldStep.TryGetValue(k, out var s) ? s : 5).DefaultIfEmpty(5).Min();
+            _generalError = first == 5 ? string.Join(" ", result.Problem.Errors.Values.SelectMany(v => v)) : "Some details need fixing. They're highlighted on the step.";
+            if (first < 5) _step = first;
+            return;
+        }
+        if (result.IsConcurrencyConflict) { _generalError = "Someone else changed this backup while you were editing. Reload the page to see their changes."; return; }
+        if (result.Outcome is ApiOutcome.Conflict or ApiOutcome.ValidationFailed) { _generalError = result.Message; return; }
+        Handle(result);
+    }
+
+    private static string Host(string endpoint) => Uri.TryCreate(endpoint, UriKind.Absolute, out var u) ? u.Host : endpoint;
+
+    internal sealed class WizardModel
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public long TemplateId { get; set; }
+        public long ServerId { get; set; }
+        public bool Active { get; set; } = true;
+        public string? Cron { get; set; } = "0 2 * * *";
+        public string TimeZone { get; set; } = "UTC";
+        public MissedRunPolicyDto MissedRunPolicy { get; set; } = MissedRunPolicyDto.RunOnceWithinGrace;
+        public int MissedRunGraceMinutes { get; set; } = 60;
+        public decimal RetentionDays { get; set; } = 7;
+        public int MinRecoveryPointsToKeep { get; set; } = 1;
+        public long DestinationId { get; set; }
+        public List<long> ReplicaIds { get; set; } = [];
+        public bool KeepLocalCopy { get; set; }
+        public bool RequireArtifacts { get; set; } = true;
+        public int TimeoutMinutes { get; set; } = 360;
+        public int MaxAttempts { get; set; } = 3;
+        public uint? Version { get; set; }
+
+        public void From(BackupJobDto j)
+        {
+            Name = j.Name; Description = j.Description; TemplateId = j.TemplateId; ServerId = j.ServerId;
+            Active = j.Status == JobStatusDto.Active; Cron = j.CronExpression; TimeZone = j.TimeZone;
+            MissedRunPolicy = j.MissedRunPolicy; MissedRunGraceMinutes = j.MissedRunGraceMinutes;
+            RetentionDays = j.RetentionDays; MinRecoveryPointsToKeep = j.MinRecoveryPointsToKeep;
+            DestinationId = j.S3DestinationId ?? 0; KeepLocalCopy = j.KeepLocalCopy; RequireArtifacts = j.RequireArtifacts;
+            ReplicaIds = j.ReplicationTargets?.Select(t => t.DestinationId).ToList() ?? [];
+            TimeoutMinutes = j.TimeoutMinutes; MaxAttempts = j.MaxAttempts; Version = j.Version;
+        }
+
+        /// <summary>Connection settings are not part of a job: the API takes them from its environment (BACKORA__NAME__JOB).</summary>
+        public BackupJobUpsertRequest ToRequest() => new(
+            Name.Trim(), string.IsNullOrWhiteSpace(Description) ? null : Description.Trim(), TemplateId, ServerId,
+            Active ? JobStatusDto.Active : JobStatusDto.Inactive, string.IsNullOrWhiteSpace(Cron) ? null : Cron.Trim(), TimeZone,
+            MissedRunPolicy, MissedRunGraceMinutes, RetentionDays, MinRecoveryPointsToKeep, DestinationId == 0 ? null : DestinationId,
+            DestinationId != 0 && KeepLocalCopy, RequireArtifacts, TimeoutMinutes, MaxAttempts, Version,
+            DestinationId == 0 ? [] : ReplicaIds.Where(id => id != DestinationId).Distinct().ToList(),
+            null);
+    }
+}

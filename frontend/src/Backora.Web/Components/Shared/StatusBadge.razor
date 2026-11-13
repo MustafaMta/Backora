@@ -1,0 +1,8 @@
+@* Status = glyph + short label (Linear-style), using the shared StatusMap vocabulary. *@
+<span class="ui-status ui-status--@Ui.Tone(View.Tone)" title="@(View.Description ?? (IconOnly ? View.Label : null))">
+    <StatusIcon Kind="@Ui.Glyph(View)" />@if (IconOnly) { <span class="sr-only">@View.Label</span> } else { <span class="truncate">@View.Label</span> }
+</span>
+@code {
+    [Parameter, EditorRequired] public StatusView View { get; set; }
+    [Parameter] public bool IconOnly { get; set; }
+}

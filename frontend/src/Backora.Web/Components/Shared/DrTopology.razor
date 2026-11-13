@@ -1,0 +1,93 @@
+@inject BackoraJs Js
+@* Multi-site protection map built only from real data: which jobs send copies to which primary storage,
+   and which DR sites each primary copy is replicated to. Link colour = latest copy result for that pair. *@
+<div class="topo" @ref="_root">
+    <svg class="topo__links" aria-hidden="true">
+        @foreach (var p in _primaries) { var tone = LinkTone(LatestPrimary(p.Id)); <path class="topo__link topo__link--@tone" data-from="src" data-to="@($"p{p.Id}")" /> if (tone == "ok") { <path class="topo__glint" pathLength="100" data-from="src" data-to="@($"p{p.Id}")" /> } }
+        @foreach (var (from, to) in _pairs) { var tone = LinkTone(LatestReplica(from, to)); <path class="topo__link topo__link--@tone" data-from="@($"p{from}")" data-to="@($"d{to}")" /> if (tone == "ok") { <path class="topo__glint" pathLength="100" data-from="@($"p{from}")" data-to="@($"d{to}")" /> } }
+    </svg>
+
+    <div class="topo__col">
+        <span class="topo__col-title">Source</span>
+        <div class="topo__node topo__node--source" data-node="src">
+            <span class="ui-glyph"><Icon Name="hard-drive" Size="15" /></span>
+            <span style="min-width:0"><b>Verified backups</b><small>@Ui.Plural(_jobCount, "backup job", "backup jobs")</small></span>
+            <span></span>
+        </div>
+    </div>
+    <div class="topo__col">
+        <span class="topo__col-title">Primary storage</span>
+        @if (_primaries.Count == 0) { <p class="xs muted">No backup copies off-site yet.</p> }
+        @foreach (var s in _primaries)
+        {
+            <a class="topo__node @(s.IsEnabled ? "" : "topo__node--off")" data-node="@($"p{s.Id}")" href="/storage/@s.Id">
+                <span class="ui-glyph ui-glyph--accent"><Icon Name="s3" Size="15" /></span>
+                <span style="min-width:0"><b>@s.Name</b><small>@if (Ui.Encrypted(s)) { <Icon Name="lock" Size="11" /> }@Ui.Plural(JobsTo(s.Id), "job", "jobs") · @Fmt.Bytes(s.StoredBytes)</small></span>
+                <StatusBadge View="SiteView(s, LatestPrimary(s.Id))" IconOnly="true" />
+            </a>
+        }
+    </div>
+    <div class="topo__col">
+        <span class="topo__col-title">Disaster recovery sites</span>
+        @if (_drs.Count == 0) { <p class="xs muted">No DR site assigned. Add one on a backup job to keep a second copy elsewhere.</p> }
+        @foreach (var s in _drs)
+        {
+            <a class="topo__node @(s.IsEnabled ? "" : "topo__node--off")" data-node="@($"d{s.Id}")" href="/storage/@s.Id">
+                <span class="ui-glyph ui-glyph--flow"><Icon Name="topology" Size="15" /></span>
+                <span style="min-width:0"><b>@s.Name</b><small>@if (Ui.Encrypted(s)) { <Icon Name="lock" Size="11" /> }@Ui.Plural(_pairs.Count(p => p.To == s.Id), "copy route", "copy routes") · @Fmt.Bytes(s.StoredBytes)</small></span>
+                <StatusBadge View="SiteView(s, LatestReplicaTo(s.Id))" IconOnly="true" />
+            </a>
+        }
+    </div>
+</div>
+@if (Unused > 0) { <p class="xs muted" style="margin-top:10px">@Ui.Plural(Unused, "storage site isn't", "storage sites aren't") used by any backup yet.</p> }
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<BackupJobDto> Jobs { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<S3DestinationDto> Sites { get; set; } = [];
+    /// <summary>Recent copies (recovery points), newest first.</summary>
+    [Parameter] public IReadOnlyList<OffloadSummaryDto> Copies { get; set; } = [];
+
+    private ElementReference _root;
+    private List<S3DestinationDto> _primaries = [], _drs = [];
+    private List<(long From, long To)> _pairs = [];
+    private int _jobCount;
+    private int Unused => Sites.Count(s => !_primaries.Contains(s) && !_drs.Contains(s));
+
+    protected override void OnParametersSet()
+    {
+        var byId = Sites.ToDictionary(s => s.Id);
+        var withStorage = Jobs.Where(j => j.S3DestinationId is not null).ToList();
+        _jobCount = Jobs.Count;
+        _primaries = withStorage.Select(j => j.S3DestinationId!.Value).Distinct().Where(byId.ContainsKey).Select(id => byId[id]).OrderBy(s => s.Name).ToList();
+        _pairs = withStorage.SelectMany(j => (j.ReplicationTargets ?? []).Select(t => (From: j.S3DestinationId!.Value, To: t.DestinationId))).Distinct().ToList();
+        _drs = _pairs.Select(p => p.To).Distinct().Where(byId.ContainsKey).Select(id => byId[id]).OrderBy(s => s.Name).ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first) => await Js.InvokeVoidAsync("drawLinks", _root);
+
+    private int JobsTo(long id) => Jobs.Count(j => j.S3DestinationId == id);
+    private OffloadSummaryDto? LatestPrimary(long id) => Copies.FirstOrDefault(c => c.DestinationId == id && !c.IsReplica);
+    private OffloadSummaryDto? LatestReplicaTo(long id) => Copies.FirstOrDefault(c => c.DestinationId == id && c.IsReplica);
+    private OffloadSummaryDto? LatestReplica(long from, long to)
+    {
+        var src = Sites.FirstOrDefault(s => s.Id == from)?.Name;
+        return Copies.FirstOrDefault(c => c.DestinationId == to && c.IsReplica && (src is null || c.SourceDestinationName == src));
+    }
+
+    private static string LinkTone(OffloadSummaryDto? o) => o?.Status switch
+    {
+        OffloadStatusDto.Completed => "ok",
+        OffloadStatusDto.Failed => "bad",
+        OffloadStatusDto.Running or OffloadStatusDto.Verifying or OffloadStatusDto.Pending => "ok topo__link--anim",
+        _ => "idle",
+    };
+
+    internal static StatusView SiteView(S3DestinationDto s, OffloadSummaryDto? latest) =>
+        !s.IsEnabled ? new("Paused", StatusTone.Neutral, "pause")
+        : s.LastConnectionTestSucceeded == false ? new("Can't connect", StatusTone.Danger)
+        : latest?.Status == OffloadStatusDto.Failed ? new("Last copy failed", StatusTone.Danger)
+        : latest?.Status == OffloadStatusDto.Completed ? new("Last copy stored", StatusTone.Success)
+        : latest is not null ? new("Copying", StatusTone.Running)
+        : new("No copy yet", StatusTone.Neutral);
+}

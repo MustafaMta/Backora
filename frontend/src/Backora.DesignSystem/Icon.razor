@@ -1,0 +1,10 @@
+@* Backora V2 icon: one stroke family (Lucide, ISC) plus custom domain glyphs on the same 24 px grid. Decorative unless Label is set. *@
+<svg class="ui-icon @(Spin ? "ui-spin" : null) @Class" width="@Size" height="@Size" viewBox="0 0 24 24" aria-hidden="@(Label is null ? "true" : null)" role="@(Label is null ? null : "img")" aria-label="@Label" focusable="false">@((MarkupString)Icons.Get(Name))</svg>
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "circle";
+    [Parameter] public int Size { get; set; } = 16;
+    [Parameter] public bool Spin { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public string? Label { get; set; }
+}

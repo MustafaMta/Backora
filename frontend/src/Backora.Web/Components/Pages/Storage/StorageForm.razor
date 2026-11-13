@@ -1,0 +1,550 @@
+@page "/storage/new"
+@page "/storage/{Id:long}"
+<PageTitle>@(IsNew ? (IsDr ? "Add DR site" : "Add storage") : _dest?.Name ?? "Storage") · Backora</PageTitle>
+
+<PageHead Title="@(IsNew ? (IsDr ? "Add a disaster recovery site" : "Add storage") : _dest?.Name ?? "Storage")" BackHref="/storage" BackLabel="Storage &amp; DR">
+    <Lead>@if (_dest is not null) { <span class="ui-glyph ui-glyph--lg ui-glyph--accent"><Icon Name="@(IsFolder ? "folder" : "s3")" Size="22" /></span> }</Lead>
+    <Suffix>@if (_dest is not null) { <StatusBadge View="StorageList.State(_dest)" /> }</Suffix>
+    <Actions>
+        @if (!IsNew && _dest is not null && Can(Permissions.StorageWrite))
+        {
+            <Dropdown AriaLabel="More actions" ButtonClass="ui-btn ui-btn--icon">
+                <Trigger><Icon Name="more" Size="16" /></Trigger>
+                <ChildContent>
+                    @if (DrJobs.Count > 0 && Can(Permissions.JobsWrite)) { <button type="button" class="ui-menu__item" @onclick="OpenMove"><Icon Name="topology" Size="15" />Move DR jobs to another site…</button> }
+                    <button type="button" class="ui-menu__item ui-menu__item--danger" @onclick="() => _confirmDelete = true"><Icon Name="trash" Size="15" />Delete storage…</button>
+                </ChildContent>
+            </Dropdown>
+        }
+    </Actions>
+</PageHead>
+
+@if (_loadError is not null) { <div class="app-page"><Empty Error="true" Title="We couldn't load this storage" Message="@_loadError"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty></div> }
+else if (!IsNew && _dest is null) { <Loading Text="Loading storage…" /> }
+else if (_created is not null)
+{
+    <div class="app-page create create--single">
+        <section class="create-card">
+            <div class="create-card__head">
+                <div class="create-card__eyebrow">Site added</div>
+                <h2 class="create-card__title">Send copies to @_created.Name</h2>
+                <p class="create-card__lead">Choose which backup jobs should keep an extra copy here. Each job copies from its own primary storage.</p>
+            </div>
+            <div class="create-card__body">
+                @{ var candidates = _jobs.Where(j => j.S3DestinationId is not null && j.S3DestinationId != _created.Id).ToList(); }
+                @if (candidates.Count == 0) { <Empty Compact="true" Icon="jobs" Title="No jobs to assign yet" Message="Jobs need primary storage before they can copy to a DR site." /> }
+                else
+                {
+                    <div class="ui-tiles" role="group" aria-label="Backup jobs">
+                        @foreach (var j in candidates)
+                        {
+                            <Tile Multi="true" Title="@j.Name" Subtitle="@($"{j.ServerName} · primary {j.S3DestinationName}")" Icon="@Ui.Engine(j.Category)" GlyphClass="@Ui.EngineGlyph(j.Category)" Selected="_assign.Contains(j.Id)" OnSelect="() => ToggleAssign(j.Id)" />
+                        }
+                    </div>
+                }
+            </div>
+            <div class="create-card__foot">
+                <Btn Variant="ghost" Href="@($"/storage/{_created.Id}")">Skip for now</Btn>
+                <span class="grow">@(_assign.Count == 0 ? "You can assign it from any job later" : Ui.Plural(_assign.Count, "job selected", "jobs selected"))</span>
+                <Btn Variant="primary" Icon="topology" Busy="_saving" Disabled="@(_assign.Count == 0)" OnClick="AssignAsync">Use as DR site</Btn>
+            </div>
+        </section>
+    </div>
+}
+else
+{
+    var readOnly = !Can(Permissions.StorageWrite);
+    <div class="app-page create">
+        <div class="create__main">
+            <section class="create-card" aria-labelledby="st-title">
+                <div class="create-card__head">
+                    <div class="create-card__eyebrow">@(IsNew ? (IsDr ? "Disaster recovery" : "Storage") : "Storage settings")</div>
+                    <h2 id="st-title" class="create-card__title">@(IsNew ? (IsDr ? "Where should extra copies live?" : "Connect storage") : "Connection and encryption")</h2>
+                    <p class="create-card__lead">@(IsDr ? "Choose a different region or provider from your primary storage, so one outage can't take both." : "Verified backups are uploaded here. Backora checks access before saving.")</p>
+                </div>
+                <div class="create-card__body">
+                    @if (_concurrency) { <div class="ui-callout ui-callout--warn" role="alert"><Icon Name="alert" Size="15" /><div>Someone else changed this storage while you were editing. <button type="button" class="ui-btn ui-btn--sm" @onclick="LoadAsync">Reload</button></div></div> }
+                    @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+                    <div class="cs">
+                        <div class="ui-form-grid">
+                            <FormField Label="Name in Backora" For="name" Error="@Err("Name")" Hint="@(IsDr ? "For example: DR site — Frankfurt" : "For example: Primary — AWS Bahrain")"><input id="name" class="ui-input" @bind="_m.Name" disabled="@readOnly" maxlength="120" /></FormField>
+                        </div>
+                    </div>
+                    @if (!IsNew)
+                    {
+                        <div class="cs"><Switch Id="enabled" Value="_m.IsEnabled" ValueChanged="v => _m.IsEnabled = v" Disabled="readOnly" Label="Use this storage" Description="@(_m.IsEnabled ? "New copies are uploaded here." : "Paused. New copies skip it; existing copies can still be restored.")" /></div>
+                    }
+                    @if (IsNew)
+                    {
+                        <div class="cs">
+                            <div class="cs__head"><h3 class="cs__title">Provider</h3><span class="cs__hint">Looking for the NFS staging share? <a class="link" href="/settings/storage">Settings</a></span></div>
+                            <div class="ui-tiles ui-tiles--3" role="radiogroup" aria-label="Provider">
+                                @foreach (var pr in Providers)
+                                {
+                                    <Tile Title="@pr.Label" Subtitle="@pr.Note" Icon="@pr.Icon" GlyphClass="ui-glyph--accent" Selected="_provider == pr.Key" OnSelect="() => PickProvider(pr.Key)" />
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (IsFolder)
+                    {
+                        <div class="cs">
+                            <div class="cs__head"><h3 class="cs__title">Folder on the execution host</h3><span class="cs__hint">Mount the NFS share there first</span></div>
+                            <div class="ui-form-grid">
+                                <FormField Label="Path" For="localpath" Error="@Err("LocalPath")" Hint="Where the share is mounted on the execution host, for example /mnt/dr-site."><div class="ui-input-wrap"><Icon Name="folder" Size="14" /><input id="localpath" class="ui-input mono" @bind="_m.LocalPath" disabled="@(readOnly || (!IsNew && (_dest?.RecoveryPointCount ?? 0) > 0))" placeholder="/mnt/dr-site" /></div></FormField>
+                                <FormField Label="Sub-folder" For="prefix" Optional="true" Error="@Err("PathPrefix")"><input id="prefix" class="ui-input mono" @bind="_m.PathPrefix" disabled="@readOnly" placeholder="backora" /></FormField>
+                            </div>
+                            <div class="row-wrap">
+                                <Btn Icon="plug" Busy="_testing" Disabled="@(readOnly || string.IsNullOrWhiteSpace(_m.LocalPath))" OnClick="TestAsync">Test access</Btn>
+                                @if (_test is null && !_testing) { <span class="xs muted">Checks the folder is mounted, writes and reads a small test file, then removes it.</span> }
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Bucket</h3></div>
+                        <div class="ui-form-grid">
+                            @if (_provider == "r2")
+                            {
+                                <FormField Label="Account ID" For="acct" Hint="From the R2 dashboard."><input id="acct" class="ui-input mono" value="@_account" @onchange="e => { _account = e.Value?.ToString() ?? string.Empty; ApplyEndpoint(); }" disabled="@readOnly" /></FormField>
+                            }
+                            else if (_provider is "aws" or "wasabi" or "b2")
+                            {
+                                <FormField Label="Region" For="region" Error="@Err("Region")"><input id="region" class="ui-input mono" value="@_m.Region" @onchange="e => { _m.Region = e.Value?.ToString() ?? string.Empty; ApplyEndpoint(); }" disabled="@readOnly" /></FormField>
+                            }
+                            else
+                            {
+                                <FormField Label="Endpoint URL" For="endpoint" Error="@Err("Endpoint")"><input id="endpoint" class="ui-input mono" @bind="_m.Endpoint" disabled="@readOnly" placeholder="https://minio.internal:9000" /></FormField>
+                            }
+                            <FormField Label="Bucket" For="bucket" Error="@Err("Bucket")"><input id="bucket" class="ui-input mono" @bind="_m.Bucket" disabled="@readOnly" /></FormField>
+                            <FormField Label="Folder" For="prefix" Optional="true" Error="@Err("PathPrefix")"><input id="prefix" class="ui-input mono" @bind="_m.PathPrefix" disabled="@readOnly" placeholder="backora" /></FormField>
+                        </div>
+                    </div>
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Access</h3><span class="cs__hint">Stored encrypted. Never shown again.</span></div>
+                        <div class="ui-form-grid">
+                            <FormField Label="Access key ID" For="ak" Error="@Err("AccessKeyId")" Hint="@(IsNew ? null : $"Stored as {_dest?.AccessKeyIdMasked}. Re-enter to save changes.")"><div class="ui-input-wrap"><Icon Name="key" Size="14" /><input id="ak" class="ui-input mono" @bind="_m.AccessKeyId" disabled="@readOnly" autocomplete="off" /></div></FormField>
+                            <FormField Label="Secret key" For="sk" Error="@Err("SecretKey")" Hint="@(IsNew ? null : "Leave empty to keep the stored secret.")"><div class="ui-input-wrap"><Icon Name="lock" Size="14" /><input id="sk" class="ui-input mono" type="password" @bind="_m.SecretKey" disabled="@readOnly" autocomplete="new-password" /></div></FormField>
+                        </div>
+                        <div class="row-wrap">
+                            <Btn Icon="plug" Busy="_testing" Disabled="@(readOnly || string.IsNullOrWhiteSpace(_m.AccessKeyId) || string.IsNullOrWhiteSpace(_m.Bucket))" OnClick="TestAsync">Test access</Btn>
+                            @if (_test is null && !_testing) { <span class="xs muted">Lists and writes a small test object, then removes it.</span> }
+                        </div>
+                    </div>
+                    }
+                    @if (_test is not null)
+                    {
+                        <div class="result @(_test.Success ? "result--ok" : "result--bad")">
+                            <StatusBadge View="@(_test.Success ? OkView : FailView)" IconOnly="true" />
+                            <div style="min-width:0"><b>@(_test.Success ? "Access confirmed" : "Access failed")</b><small>@_test.Message</small>
+                                @foreach (var c in _test.Checks.Where(c => c.State != CheckState.Passed)) { <small><span class="strong">@c.Name</span> — @c.Message</small> }
+                            </div>
+                        </div>
+                    }
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Encryption</h3><span class="cs__hint">Encrypted on the execution host before upload</span></div>
+                        @if (_age == false)
+                        {
+                            <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div><strong>Encryption isn't available.</strong> The execution host doesn't have the <span class="mono">age</span> tool, so encrypted uploads would fail. Install it, then run “Check again” on the <a href="/execution-host">execution host</a>.</div></div>
+                        }
+                        else if (_age is null && Can(Permissions.SettingsRead))
+                        {
+                            <p class="xs muted">The execution host's encryption tool hasn't been checked yet. <a class="link" href="/execution-host">Check capabilities</a></p>
+                        }
+                        <div class="ui-tiles" role="radiogroup" aria-label="Encryption" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+                            <Tile Title="Backora key" Subtitle="One key for every site, kept encrypted in Backora. Restores and listings decrypt automatically." Icon="key" GlyphClass="ui-glyph--accent" Tag="Recommended" Selected="_encMode == EncryptionModeDto.CustomerKey && _backoraKey" Disabled="@(readOnly || (_age == false && !DestEncrypted))" OnSelect="SelectBackoraKey" />
+                            <Tile Title="Encrypt with my key" Subtitle="Only your public key is stored here. You keep the private key." Icon="lock" GlyphClass="ui-glyph--flow" Selected="_encMode == EncryptionModeDto.CustomerKey && !_backoraKey" Disabled="@(readOnly || (_age == false && !DestEncrypted))" OnSelect="SelectCustomerKey" />
+                            <Tile Title="Provider encryption only" Subtitle="Rely on the storage provider's at-rest encryption." Icon="unlock" Selected="_encMode == EncryptionModeDto.None" Disabled="readOnly" OnSelect="SelectNone" />
+                        </div>
+                        @if (_encMode == EncryptionModeDto.CustomerKey && _backoraKey)
+                        {
+                            <div class="ui-callout ui-callout--info"><Icon Name="key" Size="15" /><div>Backora encrypts uploads with its own age key and keeps the private key in the database, encrypted with the app's encryption key. The same key is used on every site with this option, so restores never ask for a key.@if (_dest is { BackoraHoldsKey: true }) { <span class="mono"> · @_dest.EncryptionKeyFingerprint</span> }</div></div>
+                        }
+                        else if (_encMode == EncryptionModeDto.CustomerKey)
+                        {
+                            <FormField Label="Your public key" For="recipient" Error="@RecipientError" Hint="An age recipient starting with age1. Don't have one? Generate a pair below.">
+                                <div class="ui-input-wrap"><Icon Name="fingerprint" Size="14" /><input id="recipient" class="ui-input mono" value="@_recipient" @oninput="OnRecipientInput" disabled="@readOnly" spellcheck="false" autocomplete="off" placeholder="age1…" /></div>
+                            </FormField>
+                            @if (_inspecting) { <span class="xs muted row"><span class="ui-spinner"></span>Checking the key…</span> }
+                            else if (_inspection is { Valid: true }) { <span class="xs t-ok row"><Icon Name="circle-check" Size="13" />Valid key · fingerprint <span class="mono">@_inspection.Fingerprint</span></span> }
+                            else if (DestEncrypted && !RecipientChanged) { <span class="xs muted row"><Icon Name="fingerprint" Size="13" />Active key <span class="mono">@_dest!.EncryptionKeyFingerprint</span></span> }
+                            @if (!readOnly) { <div><Btn Size="sm" Icon="sparkles" Busy="_generating" OnClick="GenerateAsync">Generate a key pair</Btn></div> }
+                            @if (DestEncrypted && RecipientChanged && _inspection is { Valid: true }) { <div class="ui-callout ui-callout--info"><Icon Name="info" Size="15" /><div>New copies use the new key. Older copies still need the key they were made with.</div></div> }
+                        }
+                        else if (DestEncrypted)
+                        {
+                            <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div>Encryption turns off when you save. <button type="button" class="ui-btn ui-btn--sm" @onclick="UndoDisable">Keep encryption</button></div></div>
+                        }
+                    </div>
+                    @if (!IsFolder || (_dest?.EncryptionKeyHistory?.Count ?? 0) > 1)
+                    {
+                    <details class="ui-disclose">
+                        <summary><Icon Name="settings" Size="14" />Advanced connection settings<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                        <div class="ui-disclose__body stack">
+                            @if (IsFolder) { }
+                            else if (_provider is "aws" or "wasabi" or "b2" or "r2")
+                            {
+                                <FormField Label="Endpoint URL" For="endpoint2" Hint="Filled in from the provider and region." Error="@Err("Endpoint")"><input id="endpoint2" class="ui-input mono" @bind="_m.Endpoint" disabled="@readOnly" /></FormField>
+                            }
+                            else { <FormField Label="Region" For="region2" Error="@Err("Region")"><input id="region2" class="ui-input mono" @bind="_m.Region" disabled="@readOnly" /></FormField> }
+                            @if (!IsFolder) { <Switch Id="pathstyle" Value="_m.ForcePathStyle" ValueChanged="v => _m.ForcePathStyle = v" Disabled="readOnly" Label="Path-style URLs" Description="Needed by MinIO and most self-hosted S3." /> }
+                            @if ((_dest?.EncryptionKeyHistory?.Count ?? 0) > 1)
+                            {
+                                <div><span class="ui-label">Key history</span>
+                                    @foreach (var k in _dest!.EncryptionKeyHistory!) { <div class="row xs" style="padding:4px 0"><span class="mono grow truncate">@k.Fingerprint</span><span class="muted">@(k.RetiredAt is null ? "Active" : "Retired") · @Ui.Plural(k.RecoveryPointCount, "copy", "copies")</span></div> }
+                                </div>
+                            }
+                        </div>
+                    </details>
+                    }
+                </div>
+                @if (!readOnly)
+                {
+                    <div class="create-card__foot">
+                        <Btn Variant="ghost" Href="/storage">Cancel</Btn>
+                        <span class="grow">@(IsNew && _test?.Success != true ? "Test access before saving" : "")</span>
+                        <Btn Variant="primary" Icon="check" Busy="_saving" OnClick="SaveAsync">@(IsNew ? (IsDr ? "Add DR site" : "Add storage") : "Save changes")</Btn>
+                    </div>
+                }
+            </section>
+        </div>
+        <aside class="create__aside">
+            <div class="plan">
+                <div class="plan__head"><Icon Name="lock" Size="15" Class="t-accent" /><h3>Secure storage</h3></div>
+                <div style="padding:14px 18px 4px"><SecureStorageArt Encrypted="@(_encMode == EncryptionModeDto.CustomerKey)" /></div>
+                <div class="plan__rows">
+                    <PlanRow Icon="@(IsFolder ? "folder" : "s3")" Glyph="ui-glyph--accent" Label="Provider" Value="@ProviderLabel" Sub="@(IsFolder ? "Mounted on the execution host" : string.IsNullOrWhiteSpace(_m.Endpoint) || _m.Endpoint == "https://" ? null : StorageList.Host(_m.Endpoint))" />
+                    <PlanRow Icon="folder" Label="Copies land in" Value="@LandIn" />
+                    <PlanRow Icon="@(_encMode == EncryptionModeDto.CustomerKey ? "lock" : "unlock")" Glyph="@(_encMode == EncryptionModeDto.CustomerKey ? "ui-glyph--flow" : null)" Label="Encryption" Value="@(_encMode != EncryptionModeDto.CustomerKey ? "Provider only" : _backoraKey ? "Backora key" : "Your key")" Sub="@(_encMode != EncryptionModeDto.CustomerKey ? null : _backoraKey ? "Decrypts automatically" : "Restores need your private key")" />
+                    @if (_dest is not null) { <PlanRow Icon="jobs" Label="Used by" Value="@UsageText" Sub="@($"{Fmt.Number(_dest.RecoveryPointCount)} recovery points · {Fmt.Bytes(_dest.StoredBytes)}")" /> }
+                </div>
+                <div class="plan__foot"><Icon Name="info" Size="14" /><span>Retention is set per backup job and applies to every site the job copies to.</span></div>
+            </div>
+        </aside>
+    </div>
+
+    <Dialog @bind-Open="_keyModalOpen" Title="Save your private key" Icon="private-key" IconTone="warn" Locked="true" Large="true">
+        <ChildContent>
+            <div class="stack">
+                <p>Backora shows this once and never stores it. Without it, nobody can restore encrypted copies, including Backora.</p>
+                <div class="secret-once"><pre class="ui-code" style="margin:0;background:transparent;box-shadow:none;padding:0" aria-label="Private key">@_privateKeyOnce</pre></div>
+                <div class="row"><Btn Size="sm" Icon="copy" OnClick="CopyKeyAsync">Copy private key</Btn><span class="xs muted">Paste it into your password manager or key vault now.</span></div>
+                <label class="ui-check"><input type="checkbox" checked="@_keySaved" @onchange="e => _keySaved = e.Value is true" />I saved the private key somewhere safe</label>
+            </div>
+        </ChildContent>
+        <Footer><Btn Variant="primary" Disabled="@(!_keySaved)" OnClick="FinishKeyPairAsync">Use this key</Btn></Footer>
+    </Dialog>
+    <Confirm @bind-Open="_confirmDisable" Title="Turn off encryption?" Danger="true" Icon="unlock" ConfirmText="Turn off" OnConfirm="ConfirmDisable" Message="New copies will be uploaded without client-side encryption. Existing encrypted copies still need their key." />
+    <Confirm @bind-Open="_moveOpen" Title="@($"Move {Ui.Plural(DrJobs.Count, "DR job", "DR jobs")} to another site")" Icon="topology" ConfirmText="Move jobs" Busy="_moving" OnConfirm="MoveAsync">
+        <Body>
+            <p class="muted" style="margin-top:0">These jobs copy their recovery points to @_dest?.Name. From their next backup on they copy to the site you choose. Copies already on @_dest?.Name stay there and can still be restored until retention removes them.</p>
+            <FormField Label="Copy to" For="move-to">
+                <select id="move-to" class="ui-select" @bind="_moveTo">
+                    <option value="0">Choose a site…</option>
+                    @foreach (var s in _sites.Where(s => s.Id != _dest?.Id && s.IsEnabled)) { <option value="@s.Id">@s.Name · @StorageList.ProviderOf(s)</option> }
+                </select>
+            </FormField>
+            <p class="xs muted">@string.Join(", ", DrJobs.Select(j => j.Name).Take(12))@(DrJobs.Count > 12 ? $" and {DrJobs.Count - 12} more" : "")</p>
+        </Body>
+    </Confirm>
+    <Confirm @bind-Open="_confirmDelete" Title="Delete this storage?" Danger="true" Icon="trash" ConfirmText="Delete storage" Busy="_deleting" RequireText="@_dest?.Name" OnConfirm="DeleteAsync" Message="Backora forgets this site. Files in the bucket aren't deleted. Storage used by a backup job can't be deleted." />
+}
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    [Inject] private BackoraJs Js { get; set; } = default!;
+    private bool IsNew => Id is null;
+    [SupplyParameterFromQuery(Name = "purpose")] public string? Purpose { get; set; }
+    private bool IsDr => string.Equals(Purpose, "dr", StringComparison.OrdinalIgnoreCase);
+    private static readonly StatusView OkView = new("Confirmed", StatusTone.Success), FailView = new("Failed", StatusTone.Danger);
+    private sealed record ProviderInfo(string Key, string Label, string Note, string Icon);
+    private static readonly ProviderInfo[] Providers =
+    [
+        new("aws", "Amazon S3", "Any AWS region", "s3"), new("wasabi", "Wasabi", "Hot cloud storage", "cloud"), new("b2", "Backblaze B2", "S3-compatible API", "cloud"),
+        new("r2", "Cloudflare R2", "No egress fees", "cloud"), new("minio", "MinIO", "Self-hosted", "server"), new("other", "Other S3-compatible", "Any endpoint", "s3"),
+        new("nfs", "NFS / folder", "A share mounted on the execution host", "folder"),
+    ];
+    /// <summary>A folder on the execution host (a mounted NFS share) instead of an S3 bucket.</summary>
+    private bool IsFolder => IsNew ? _provider == "nfs" : _dest?.Kind == StorageKindDto.Filesystem;
+    private string? LandIn
+    {
+        get
+        {
+            var root = IsFolder ? _m.LocalPath?.Trim().TrimEnd('/') : _m.Bucket.Trim();
+            if (string.IsNullOrWhiteSpace(root)) return null;
+            return $"{root}/{(string.IsNullOrWhiteSpace(_m.PathPrefix) ? "" : _m.PathPrefix.Trim('/') + "/")}<job>/";
+        }
+    }
+    private string _provider = "aws", _account = string.Empty;
+    private bool? _age;
+    private List<BackupJobDto> _jobs = [];
+    private S3DestinationDto? _created;
+    private readonly HashSet<long> _assign = [];
+
+    private string ProviderLabel => IsNew ? Providers.First(p => p.Key == _provider).Label : _dest is { } d ? StorageList.ProviderOf(d) : StorageList.Provider(_m.Endpoint);
+    private string UsageText => _dest is null ? "" : (_jobs.Count(j => j.S3DestinationId == _dest.Id), _jobs.Count(j => j.ReplicationTargets?.Any(t => t.DestinationId == _dest.Id) == true)) switch
+    {
+        (0, 0) => "No job yet",
+        (var p, 0) => $"Primary for {Ui.Plural(p, "job", "jobs")}",
+        (0, var r) => $"DR site for {Ui.Plural(r, "job", "jobs")}",
+        (var p, var r) => $"Primary ×{p} · DR ×{r}",
+    };
+
+    private void PickProvider(string key)
+    {
+        _provider = key;
+        _test = null;
+        if (key == "nfs") return;
+        (_m.Region, _m.ForcePathStyle) = key switch
+        {
+            "aws" => (_m.Region is { Length: > 0 } r && r != "auto" ? r : "us-east-1", false),
+            "wasabi" => ("us-east-1", false),
+            "b2" => ("us-west-004", false),
+            "r2" => ("auto", true),
+            _ => (_m.Region is { Length: > 0 } r2 && r2 != "auto" ? r2 : "us-east-1", true),
+        };
+        if (key is "minio" or "other") { if (_m.Endpoint.Contains("amazonaws", StringComparison.Ordinal) || _m.Endpoint.Contains("wasabisys", StringComparison.Ordinal) || _m.Endpoint.Contains("backblazeb2", StringComparison.Ordinal) || _m.Endpoint.Contains("r2.cloudflarestorage", StringComparison.Ordinal)) _m.Endpoint = "https://"; }
+        else ApplyEndpoint();
+    }
+
+    private void ApplyEndpoint()
+    {
+        var region = string.IsNullOrWhiteSpace(_m.Region) ? "us-east-1" : _m.Region.Trim();
+        _m.Endpoint = _provider switch
+        {
+            "aws" => $"https://s3.{region}.amazonaws.com",
+            "wasabi" => $"https://s3.{region}.wasabisys.com",
+            "b2" => $"https://s3.{region}.backblazeb2.com",
+            "r2" => string.IsNullOrWhiteSpace(_account) ? "https://" : $"https://{_account.Trim()}.r2.cloudflarestorage.com",
+            _ => _m.Endpoint,
+        };
+    }
+
+    private void ToggleAssign(long id) { if (!_assign.Remove(id)) _assign.Add(id); }
+
+    private async Task AssignAsync()
+    {
+        if (_created is null) return;
+        _saving = true;
+        var failed = 0;
+        foreach (var j in _jobs.Where(j => _assign.Contains(j.Id)))
+        {
+            var m = new Backora.Web.Components.Pages.Backups.BackupWizard.WizardModel();
+            m.From(j);
+            if (!m.ReplicaIds.Contains(_created.Id)) m.ReplicaIds.Add(_created.Id);
+            if (!(await Api.Jobs.UpdateAsync(j.Id, m.ToRequest())).Ok) failed++;
+        }
+        _saving = false;
+        if (failed == 0) Toasts.Success($"{_created.Name} is now a DR site", Ui.Plural(_assign.Count, "job copies here", "jobs copy here"));
+        else Toasts.Error("Some jobs weren't updated", $"{failed} of {_assign.Count} failed. Try again from the job page.");
+        Nav.NavigateTo($"/storage/{_created.Id}");
+    }
+
+    private List<S3DestinationDto> _sites = [];
+    private bool _moveOpen, _moving;
+    private long _moveTo;
+    private List<BackupJobDto> DrJobs => _dest is null ? [] : _jobs.Where(j => j.ReplicationTargets?.Any(t => t.DestinationId == _dest.Id) == true).ToList();
+
+    private async Task OpenMove()
+    {
+        _sites = (await Api.Storage.ListAsync()).Value ?? [];
+        _moveTo = 0;
+        _moveOpen = true;
+    }
+
+    private async Task MoveAsync()
+    {
+        if (_dest is null || _moveTo == 0) { Toasts.Error("Choose a site", "Pick the site the jobs should copy to."); return; }
+        _moving = true;
+        var r = await Api.Storage.MoveDrJobsAsync(_dest.Id, _moveTo);
+        _moving = false;
+        if (Handle(r, "DR jobs moved", r.Value is { } v ? $"{Ui.Plural(v.Jobs, "job copies", "jobs copy")} to {v.ToDestinationName} from the next backup." : null))
+        {
+            _moveOpen = false;
+            var jobs = Can(Permissions.JobsRead) ? await Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name") : null;
+            if (jobs is not null) _jobs = jobs.Value?.Items.ToList() ?? [];
+            await LoadAsync();
+        }
+    }
+
+    private readonly S3Model _m = new();
+    private S3DestinationDto? _dest;
+    private S3TestResultDto? _test;
+    private ApiResult? _lastResult;
+    private string? _loadError, _generalError;
+    private bool _saving, _testing, _deleting, _confirmDelete, _concurrency;
+
+    private EncryptionModeDto _encMode = EncryptionModeDto.None;
+    private string _recipient = string.Empty;
+    private RecipientInspectionDto? _inspection;
+    private string? _recipientError;
+    private bool _backoraKey;
+    private bool _inspecting, _generating, _keyModalOpen, _keySaved, _confirmDisable, _disableConfirmed;
+    private string? _privateKeyOnce, _generatedRecipient;
+    private CancellationTokenSource? _inspectCts;
+
+    private bool DestEncrypted => _dest?.EncryptionMode == EncryptionModeDto.CustomerKey;
+    private bool RecipientChanged => !string.Equals(_recipient.Trim(), _dest?.EncryptionRecipient ?? string.Empty, StringComparison.Ordinal);
+    private string? RecipientError => _recipientError ?? (_inspection is { Valid: false } ? _inspection.Error ?? "This isn't a valid age public key. It starts with age1." : null) ?? Err("EncryptionRecipient");
+    private string? Err(string f) => _lastResult?.FieldError(f);
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        var host = Can(Permissions.SettingsRead) ? Api.Settings.ExecutionHostAsync(PageToken) : null;
+        var jobs = Can(Permissions.JobsRead) ? Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name") : null;
+        if (host is not null && (await host).Value?.Probe is { } probe)
+            _age = probe.Tools.FirstOrDefault(x => string.Equals(x.Name, "age", StringComparison.OrdinalIgnoreCase)) is { } tool ? tool.Version is not null : null;
+        if (jobs is not null) _jobs = (await jobs).Value?.Items.ToList() ?? [];
+        if (!IsNew) await LoadAsync(); else { _m.Region = "us-east-1"; ApplyEndpoint(); _m.ForcePathStyle = false; }
+    }
+
+    private async Task LoadAsync()
+    {
+        _concurrency = false; _loadError = null;
+        var r = await Api.Storage.GetAsync(Id!.Value);
+        _loadError = r.StatusCode == 404 ? "This storage doesn't exist or was deleted." : ErrorOf(r);
+        if (r.Value is not { } d) return;
+        _dest = d;
+        _m.Name = d.Name; _m.Endpoint = d.Endpoint; _m.Region = d.Region; _m.Bucket = d.Bucket; _m.PathPrefix = d.PathPrefix; _m.LocalPath = d.LocalPath;
+        _m.ForcePathStyle = d.ForcePathStyle; _m.IsEnabled = d.IsEnabled; _m.SecretKey = null; _m.Version = d.Version;
+        _m.AccessKeyId = d.AccessKeyIdMasked.Contains('*', StringComparison.Ordinal) || d.AccessKeyIdMasked.Contains('•', StringComparison.Ordinal) ? string.Empty : d.AccessKeyIdMasked;
+        _encMode = d.EncryptionMode; _recipient = d.EncryptionRecipient ?? string.Empty; _backoraKey = d.BackoraHoldsKey;
+        _inspection = null; _recipientError = null; _disableConfirmed = false;
+    }
+
+    private void SelectNone()
+    {
+        if (DestEncrypted && !_disableConfirmed) { _confirmDisable = true; return; }
+        _encMode = EncryptionModeDto.None; _recipientError = null;
+    }
+    private void SelectCustomerKey() { _encMode = EncryptionModeDto.CustomerKey; _backoraKey = false; _disableConfirmed = false; }
+    private void SelectBackoraKey() { _encMode = EncryptionModeDto.CustomerKey; _backoraKey = true; _disableConfirmed = false; _recipientError = null; }
+    private void ConfirmDisable() { _disableConfirmed = true; _encMode = EncryptionModeDto.None; _recipientError = null; _confirmDisable = false; }
+    private void UndoDisable() { _disableConfirmed = false; _encMode = EncryptionModeDto.CustomerKey; _backoraKey = _dest?.BackoraHoldsKey ?? false; }
+
+    private async Task OnRecipientInput(ChangeEventArgs e)
+    {
+        _recipient = e.Value?.ToString() ?? string.Empty;
+        _recipientError = null; _inspection = null;
+        _inspectCts?.Cancel();
+        var value = _recipient.Trim();
+        if (value.Length == 0 || (DestEncrypted && !RecipientChanged)) { _inspecting = false; return; }
+        _inspectCts = new CancellationTokenSource();
+        var token = _inspectCts.Token;
+        _inspecting = true;
+        try { await Task.Delay(400, token); } catch (OperationCanceledException) { return; }
+        await InspectAsync(value, token);
+    }
+
+    private async Task InspectAsync(string value, CancellationToken token)
+    {
+        _inspecting = true;
+        try
+        {
+            var r = await Api.Storage.InspectRecipientAsync(value, token);
+            if (token.IsCancellationRequested) return;
+            if (r.Ok) _inspection = r.Value; else _recipientError = ErrorOf(r);
+        }
+        catch (OperationCanceledException) { return; }
+        _inspecting = false;
+    }
+
+    private async Task GenerateAsync()
+    {
+        _generating = true;
+        var r = await Api.Storage.GenerateKeyPairAsync();
+        _generating = false;
+        if (!Handle(r) || r.Value is null) return;
+        _privateKeyOnce = r.Value.PrivateKey; _generatedRecipient = r.Value.Recipient; _keySaved = false; _keyModalOpen = true;
+    }
+
+    private async Task CopyKeyAsync() { if (_privateKeyOnce is not null) { await Js.InvokeVoidAsync("copyText", _privateKeyOnce); Toasts.Success("Copied", "Paste it into your password manager now."); } }
+
+    private async Task FinishKeyPairAsync()
+    {
+        if (!_keySaved) return;
+        _keyModalOpen = false;
+        _privateKeyOnce = null; // dropped from memory; never shown again
+        var recipient = _generatedRecipient; _generatedRecipient = null; _keySaved = false;
+        if (string.IsNullOrEmpty(recipient)) return;
+        _encMode = EncryptionModeDto.CustomerKey; _backoraKey = false; _recipient = recipient; _recipientError = null; _inspection = null;
+        _inspectCts?.Cancel(); _inspectCts = new CancellationTokenSource();
+        await InspectAsync(recipient, _inspectCts.Token);
+    }
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        var r = await Api.Storage.TestAsync(new S3TestRequest(Id, _m.Endpoint.Trim(), _m.Region.Trim(), _m.Bucket.Trim(), _m.AccessKeyId.Trim(),
+            string.IsNullOrEmpty(_m.SecretKey) ? null : _m.SecretKey, _m.ForcePathStyle, _m.PathPrefix,
+            IsFolder ? StorageKindDto.Filesystem : StorageKindDto.S3, IsFolder ? _m.LocalPath?.Trim() : null));
+        _testing = false;
+        if (Handle(r)) _test = r.Value;
+    }
+
+    private async Task SaveAsync()
+    {
+        _generalError = null;
+        if (!IsNew && !IsFolder && string.IsNullOrWhiteSpace(_m.AccessKeyId)) { _generalError = "Re-enter the access key ID to save changes. It's stored masked."; return; }
+        if (IsFolder && string.IsNullOrWhiteSpace(_m.LocalPath)) { _generalError = "Enter the folder on the execution host where the share is mounted."; return; }
+        var recipient = _recipient.Trim();
+        if (_encMode == EncryptionModeDto.CustomerKey && !_backoraKey)
+        {
+            if (recipient.Length == 0) { _recipientError = "Enter your public key, or generate a key pair."; return; }
+            if (_inspection is { Valid: false }) { _generalError = "Fix the public key before saving."; return; }
+        }
+        var disabling = DestEncrypted && _encMode == EncryptionModeDto.None;
+        if (disabling && !_disableConfirmed) { _confirmDisable = true; return; }
+
+        _saving = true;
+        var req = new S3DestinationUpsertRequest(_m.Name.Trim(), _m.Endpoint.Trim(), _m.Region.Trim(), _m.Bucket.Trim(), _m.AccessKeyId.Trim(),
+            string.IsNullOrEmpty(_m.SecretKey) ? null : _m.SecretKey, _m.ForcePathStyle, string.IsNullOrWhiteSpace(_m.PathPrefix) ? null : _m.PathPrefix.Trim('/'), _m.Version,
+            _encMode, _encMode == EncryptionModeDto.CustomerKey && !_backoraKey ? recipient : null, disabling && _disableConfirmed, _m.IsEnabled,
+            _encMode == EncryptionModeDto.CustomerKey && _backoraKey,
+            IsFolder ? StorageKindDto.Filesystem : StorageKindDto.S3, IsFolder ? _m.LocalPath?.Trim() : null);
+        ApiResult result; long? id = Id;
+        if (IsNew) { var r = await Api.Storage.CreateAsync(req); result = r; id = r.Value?.Id; }
+        else result = await Api.Storage.UpdateAsync(Id!.Value, req);
+        _saving = false; _lastResult = result;
+        if (result.Ok)
+        {
+            Toasts.Success(IsNew ? "Storage added" : "Changes saved", _m.Name);
+            _m.SecretKey = null;
+            if (IsNew && IsDr && id is long newId) { var created = await Api.Storage.GetAsync(newId); _created = created.Value; if (_created is null) Nav.NavigateTo($"/storage/{newId}"); }
+            else if (IsNew) Nav.NavigateTo($"/storage/{id}");
+            else await LoadAsync();
+            return;
+        }
+        if (result.IsConcurrencyConflict) { _concurrency = true; return; }
+        if (result.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = result.Message; return; }
+        Handle(result);
+    }
+
+    private async Task DeleteAsync()
+    {
+        _deleting = true;
+        var r = await Api.Storage.DeleteAsync(Id!.Value);
+        _deleting = false;
+        if (r.Ok) { Toasts.Success("Storage deleted"); _confirmDelete = false; Nav.NavigateTo("/storage"); return; }
+        if (r.Outcome == ApiOutcome.Conflict) { _confirmDelete = false; Toasts.Error("Storage is in use", r.Message); return; }
+        Handle(r);
+    }
+
+    public override void Dispose() { _inspectCts?.Cancel(); _inspectCts?.Dispose(); _privateKeyOnce = null; base.Dispose(); }
+
+    private sealed class S3Model
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Endpoint { get; set; } = "https://";
+        public string Region { get; set; } = "us-east-1";
+        public string Bucket { get; set; } = string.Empty;
+        public string? PathPrefix { get; set; }
+        public bool ForcePathStyle { get; set; } = true;
+        public bool IsEnabled { get; set; } = true;
+        public string AccessKeyId { get; set; } = string.Empty;
+        public string? SecretKey { get; set; }
+        public string? LocalPath { get; set; }
+        public uint? Version { get; set; }
+    }
+}

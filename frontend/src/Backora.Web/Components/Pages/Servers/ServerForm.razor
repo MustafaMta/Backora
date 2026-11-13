@@ -1,0 +1,166 @@
+@page "/servers/new"
+@page "/servers/{Id:long}/edit"
+<PageTitle>@(IsNew ? "Add server" : "Edit server") · Backora</PageTitle>
+
+<PageHead Title="@(IsNew ? "Add a server" : $"Edit {_m.Name}")" BackHref="@(IsNew ? "/servers" : $"/servers/{Id}")" BackLabel="@(IsNew ? "Protected servers" : _m.Name)" />
+
+@if (!Can(Permissions.ServersWrite)) { <div class="app-page"><Empty Title="You can't change servers" Message="Ask an administrator for the Backup Administrator role." /></div> }
+else if (_loadError is not null) { <div class="app-page"><Empty Error="true" Title="We couldn't load this server" Message="@_loadError" /></div> }
+else if (!IsNew && !_loaded) { <Loading Text="Loading server…" /> }
+else
+{
+    <div class="app-page create">
+        <div class="create__main">
+            <section class="create-card" aria-labelledby="sf-title">
+                <div class="create-card__head">
+                    <div class="create-card__eyebrow">Protected servers</div>
+                    <h2 id="sf-title" class="create-card__title">@(IsNew ? "Connect a server to protect" : "Server details")</h2>
+                    <p class="create-card__lead">Backora reaches it over SSH through the execution host. Nothing is installed on the server.</p>
+                </div>
+                <div class="create-card__body">
+                    @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Identity</h3></div>
+                        <div class="ui-form-grid">
+                            <FormField Label="Name" For="name" Error="@Err("Name")" Hint="How the server appears in Backora."><input id="name" class="ui-input" @bind="_m.Name" maxlength="120" placeholder="db-prod-01" /></FormField>
+                            <FormField Label="Description" For="desc" Optional="true" Error="@Err("Description")"><input id="desc" class="ui-input" @bind="_m.Description" maxlength="500" placeholder="Billing database, primary" /></FormField>
+                        </div>
+                    </div>
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Connection</h3><span class="cs__hint">Reached from the execution host</span></div>
+                        <div class="ui-form-grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) minmax(0,.8fr)">
+                            <FormField Label="Address" For="host" Error="@Err("Host")"><div class="ui-input-wrap"><Icon Name="network" Size="14" /><input id="host" class="ui-input mono" @bind="_m.Host" placeholder="10.0.0.12 or db.internal" /></div></FormField>
+                            <FormField Label="SSH user" For="user" Error="@Err("SshUser")"><div class="ui-input-wrap"><Icon Name="user" Size="14" /><input id="user" class="ui-input mono" @bind="_m.SshUser" placeholder="backup" /></div></FormField>
+                            <FormField Label="Port" For="port" Error="@Err("SshPort")"><input id="port" class="ui-input" type="number" min="1" max="65535" @bind="_m.SshPort" /></FormField>
+                        </div>
+                        <div class="row" style="gap:14px">
+                            <span class="ui-label">SSH key</span>
+                            <div class="ui-segment" role="group" aria-label="SSH key">
+                                <button type="button" aria-pressed="@(!_m.UseOwnKey ? "true" : "false")" @onclick="() => _m.UseOwnKey = false">Default key</button>
+                                <button type="button" aria-pressed="@(_m.UseOwnKey ? "true" : "false")" @onclick="() => _m.UseOwnKey = true">Its own key</button>
+                            </div>
+                        </div>
+                        @if (_m.UseOwnKey)
+                        {
+                            <FormField Label="Private key" For="pk" Error="@Err("PrivateKey")" Hint="@(_hadKey ? "A key is stored. Leave empty to keep it." : "OpenSSH or PEM. Stored encrypted and never shown again.")">
+                                <textarea id="pk" class="ui-textarea ui-textarea--key" rows="4" spellcheck="false" autocomplete="off" @bind="_m.PrivateKey"></textarea>
+                            </FormField>
+                        }
+                        else { <p class="xs muted">Uses the default key from Settings. Add its public key to the server's authorized keys.</p> }
+                    </div>
+                    @if (IsNew)
+                    {
+                        <div class="cs">
+                            <div class="cs__head"><h3 class="cs__title">What runs on it?</h3><span class="cs__hint">Used to suggest a backup method next</span></div>
+                            <div class="ui-tiles ui-tiles--3" role="radiogroup" aria-label="Database engine">
+                                <Tile Title="PostgreSQL" Subtitle="pg_dump, pg_basebackup" Icon="postgresql" GlyphClass="ui-glyph--pg" Selected="@(_engine == "postgresql")" OnSelect='() => _engine = "postgresql"' />
+                                <Tile Title="MariaDB / MySQL" Subtitle="mariadb-backup, dumps" Icon="mariadb" GlyphClass="ui-glyph--maria" Selected="@(_engine == "mariadb")" OnSelect='() => _engine = "mariadb"' />
+                                <Tile Title="Files" Subtitle="Folders and archives" Icon="folder" Selected="@(_engine == "folder")" OnSelect='() => _engine = "folder"' />
+                            </div>
+                        </div>
+                    }
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Check the connection</h3><span class="cs__hint">Read-only. Nothing is changed on the server.</span></div>
+                        <div class="row-wrap">
+                            <Btn Icon="plug" Busy="_testing" Disabled="@(string.IsNullOrWhiteSpace(_m.Host) || string.IsNullOrWhiteSpace(_m.SshUser))" OnClick="TestAsync">Test connection</Btn>
+                            @if (_test is null && !_testing) { <span class="xs muted">Recommended before saving.</span> }
+                        </div>
+                        @if (_test is not null)
+                        {
+                            <div class="result @(_test.Success ? "result--ok" : "result--bad")">
+                                <StatusBadge View="@(_test.Success ? OkView : FailView)" IconOnly="true" />
+                                <div style="min-width:0"><b>@(_test.Success ? "Connected" : "Couldn't connect")</b><small>@_test.Message</small>
+                                    @if (_test is { TargetFingerprint: { } fp, TargetFingerprintTrusted: false }) { <small>Host key <span class="mono">@fp</span>. You'll confirm it on the server page after saving.</small> }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+                <div class="create-card__foot">
+                    <Btn Variant="ghost" Href="@(IsNew ? "/servers" : $"/servers/{Id}")">Cancel</Btn>
+                    <span class="grow">@(string.IsNullOrWhiteSpace(_m.Name) || string.IsNullOrWhiteSpace(_m.Host) || string.IsNullOrWhiteSpace(_m.SshUser) ? "Name, address and SSH user are required" : "")</span>
+                    <Btn Variant="primary" Icon="check" Busy="_saving" Disabled="@(string.IsNullOrWhiteSpace(_m.Name) || string.IsNullOrWhiteSpace(_m.Host) || string.IsNullOrWhiteSpace(_m.SshUser))" OnClick="SaveAsync">@(IsNew ? "Add server" : "Save changes")</Btn>
+                </div>
+            </section>
+        </div>
+        <aside class="create__aside">
+            <div class="plan">
+                <div class="plan__head"><Icon Name="network" Size="15" Class="t-accent" /><h3>How Backora connects</h3></div>
+                <div style="padding:16px 18px 6px"><ConnectArt Host="@(_execHost ?? "execution host")" Target="@(string.IsNullOrWhiteSpace(_m.Name) ? "the server" : _m.Name)" Ok="@(_test?.Success == true)" /></div>
+                <div class="plan__rows">
+                    <PlanRow Icon="lock" Label="Secrets" Value="Never shown in the browser" Sub="Keys are stored encrypted on the server side" />
+                    <PlanRow Icon="shield-check" Label="Identity" Value="Confirmed by you" Sub="You'll trust the server's host key once" />
+                    <PlanRow Icon="jobs" Glyph="ui-glyph--accent" Label="Next" Value="Protect it" Sub="Create a backup job for this server" />
+                </div>
+            </div>
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    private bool IsNew => Id is null;
+    private readonly Model _m = new();
+    private bool _loaded, _saving, _testing, _hadKey;
+    private string? _loadError, _generalError, _execHost, _engine;
+    private ApiResult? _last;
+    private ConnectionTestResultDto? _test;
+    private static readonly StatusView OkView = new("Connected", StatusTone.Success), FailView = new("Failed", StatusTone.Danger);
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        if (Can(Permissions.SettingsRead)) { var h = await Api.Settings.ExecutionHostAsync(PageToken); if (h.Value?.Node is { Configured: true } n) _execHost = n.Host; }
+        if (IsNew) return;
+        var r = await Api.Servers.GetAsync(Id!.Value);
+        _loadError = ErrorOf(r);
+        if (r.Value is { } s)
+        {
+            _m.Name = s.Name; _m.Host = s.Host; _m.SshPort = s.SshPort; _m.SshUser = s.SshUser; _m.Description = s.Description; _m.Version = s.Version;
+            _hadKey = s.HasPrivateKey; _m.UseOwnKey = s.HasPrivateKey; _loaded = true;
+        }
+    }
+
+    private string? Err(string f) => _last?.FieldError(f);
+    private string? KeyToSend => _m.UseOwnKey && !string.IsNullOrWhiteSpace(_m.PrivateKey) ? _m.PrivateKey.Trim() + "\n" : null;
+
+    private async Task TestAsync()
+    {
+        _testing = true; _test = null;
+        var r = await Api.Servers.TestAdHocAsync(new ConnectionTestRequest(_m.Host.Trim(), _m.SshPort, _m.SshUser.Trim(), KeyToSend, Id));
+        _testing = false;
+        if (Handle(r)) _test = r.Value;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        var req = new ServerUpsertRequest(_m.Name.Trim(), _m.Host.Trim(), _m.SshPort, _m.SshUser.Trim(), KeyToSend, !_m.UseOwnKey && _hadKey,
+            string.IsNullOrWhiteSpace(_m.Description) ? null : _m.Description.Trim(), _m.Version);
+        ApiResult result; long? id = Id;
+        if (IsNew) { var r = await Api.Servers.CreateAsync(req); result = r; id = r.Value?.Id; }
+        else result = await Api.Servers.UpdateAsync(Id!.Value, req);
+        _saving = false; _last = result;
+        if (result.Ok)
+        {
+            _m.PrivateKey = null;
+            Toasts.Success(IsNew ? "Server added" : "Changes saved", _m.Name);
+            Nav.NavigateTo(IsNew ? $"/servers/{id}?created=1{(_engine is null ? "" : $"&engine={_engine}")}" : $"/servers/{id}");
+            return;
+        }
+        if (result.IsConcurrencyConflict) { _generalError = "Someone else changed this server. Reload the page to see their changes."; return; }
+        if (result.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = result.Message; return; }
+        Handle(result);
+    }
+
+    private sealed class Model
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Host { get; set; } = string.Empty;
+        public int SshPort { get; set; } = 22;
+        public string SshUser { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string? PrivateKey { get; set; }
+        public bool UseOwnKey { get; set; }
+        public uint? Version { get; set; }
+    }
+}

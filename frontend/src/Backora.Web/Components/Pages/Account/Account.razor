@@ -1,0 +1,195 @@
+@page "/account"
+@page "/account/{Section}"
+<PageTitle>Your account · Backora</PageTitle>
+
+<PageHead Title="Your account" BackHref="/settings" BackLabel="Settings" Subtitle="@(CurrentUser.User is { } u ? $"{u.Email} · {string.Join(", ", u.Roles)}" : null)">
+    <Lead>@if (CurrentUser.User is { } u) { <span class="ui-avatar ui-avatar--lg">@Fmt.Initials(u.Name)</span> }</Lead>
+</PageHead>
+
+<div class="page page--narrow app-page">
+    @if (CurrentUser.User is not { } me) { <Loading /> }
+    else
+    {
+        @if (me.MustChangePassword) { <div class="ui-callout ui-callout--warn" role="alert"><Icon Name="key" Size="15" /><div><strong>Choose a new password to continue.</strong> Your administrator set a temporary one.</div></div> }
+        <div>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Profile</h2></div>
+                <div class="doc-section__body">
+                    <FormField Label="Name" For="pname" Error="@_profileResult?.FieldError("Name")"><input id="pname" class="ui-input" @bind="_name" /></FormField>
+                    <div><Btn Size="sm" Busy="@(_busy == "profile")" Disabled="@(string.IsNullOrWhiteSpace(_name) || _name == me.Name)" OnClick="SaveProfileAsync">Save name</Btn></div>
+                </div>
+            </section>
+            <section class="doc-section" id="security">
+                <div class="doc-section__intro"><h2>Password</h2><p>At least 12 characters.</p></div>
+                <div class="doc-section__body">
+                    <FormField Label="Current password" For="cpw" Error="@_pwResult?.FieldError("CurrentPassword")"><input id="cpw" class="ui-input" type="password" autocomplete="current-password" @bind="_currentPw" /></FormField>
+                    <FormField Label="New password" For="npw" Error="@_pwResult?.FieldError("NewPassword")"><input id="npw" class="ui-input" type="password" autocomplete="new-password" @bind="_newPw" /></FormField>
+                    <div><Btn Size="sm" Busy="@(_busy == "password")" Disabled="@(string.IsNullOrEmpty(_currentPw) || string.IsNullOrEmpty(_newPw))" OnClick="ChangePasswordAsync">Change password</Btn></div>
+                </div>
+            </section>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Two-step verification</h2><p>A code from an authenticator app at every sign-in.</p></div>
+                <div class="doc-section__body">
+                    @if (_recoveryCodes is not null)
+                    {
+                        <div class="secret-once stack-sm">
+                            <strong>Save these recovery codes now.</strong><span class="xs soft">Each works once if you lose your phone. They won't be shown again.</span>
+                            <pre class="ui-code" style="background:transparent;box-shadow:none;padding:0">@string.Join("\n", _recoveryCodes)</pre>
+                            <div><Btn Size="sm" OnClick="() => _recoveryCodes = null">I saved them</Btn></div>
+                        </div>
+                    }
+                    else if (me.TwoFactorEnabled)
+                    {
+                        <span class="ui-status ui-status--ok"><StatusIcon Kind="ok" />On</span>
+                        <FormField Label="Password to turn it off" For="dpw" Error="@_twoFactorError"><input id="dpw" class="ui-input" type="password" autocomplete="current-password" @bind="_disablePw" /></FormField>
+                        <div><Btn Size="sm" Variant="danger" Busy="@(_busy == "2fa")" Disabled="@string.IsNullOrEmpty(_disablePw)" OnClick="DisableTwoFactorAsync">Turn off</Btn></div>
+                    }
+                    else if (_setup is null)
+                    {
+                        <span class="ui-status ui-status--muted"><StatusIcon Kind="idle" />Off</span>
+                        <div><Btn Size="sm" Icon="shield-check" Busy="@(_busy == "2fa")" OnClick="StartTwoFactorAsync">Set up</Btn></div>
+                    }
+                    else
+                    {
+                        <ol class="stack-sm small soft" style="list-style:decimal;padding-left:18px">
+                            <li>In your authenticator app, add an account with this key:</li>
+                        </ol>
+                        <div class="row"><code class="mono" style="letter-spacing:.08em">@Fmt.GroupKey(_setup.SharedKey)</code><Btn Size="sm" Variant="ghost" IconOnly="true" Icon="copy" AriaLabel="Copy key" OnClick="() => CopyAsync(_setup.SharedKey)" /></div>
+                        <details class="ui-disclose"><summary><Icon Name="link" Size="14" />Setup link<Icon Name="chevron-down" Size="14" Class="chev" /></summary><div class="ui-disclose__body"><pre class="ui-code">@_setup.AuthenticatorUri</pre></div></details>
+                        <FormField Label="Enter the 6-digit code it shows" For="tfc" Error="@_twoFactorError"><input id="tfc" class="ui-input mono" inputmode="numeric" autocomplete="one-time-code" style="max-width:160px;letter-spacing:.14em" @bind="_code" /></FormField>
+                        <div class="row"><Btn Size="sm" Variant="primary" Busy="@(_busy == "2fa")" Disabled="@string.IsNullOrWhiteSpace(_code)" OnClick="EnableTwoFactorAsync">Turn on</Btn><Btn Size="sm" Variant="ghost" OnClick="() => _setup = null">Cancel</Btn></div>
+                    }
+                </div>
+            </section>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Access tokens</h2><p>For scripts and integrations using the Backora API.</p></div>
+                <div class="doc-section__body">
+                    @if (_newToken is not null)
+                    {
+                        <div class="secret-once stack-sm"><strong>Copy your new token now.</strong><span class="xs soft">It won't be shown again.</span><code class="mono xs" style="overflow-wrap:anywhere">@_newToken</code><div class="row"><Btn Size="sm" Icon="copy" OnClick="() => CopyAsync(_newToken)">Copy</Btn><Btn Size="sm" Variant="ghost" OnClick="() => _newToken = null">Done</Btn></div></div>
+                    }
+                    @if (_tokens is { Count: > 0 })
+                    {
+                        <div class="ui-list ui-list--inset">
+                            @foreach (var t in _tokens.Where(t => t.RevokedAt is null))
+                            {
+                                <div class="ui-list__row" style="grid-template-columns:minmax(0,1fr) auto auto">
+                                    <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none">@t.Name</span><span class="ui-list__sub mono">@t.Prefix…</span></span>
+                                    <span class="ui-list__meta">@(t.LastUsedAt is null ? "never used" : $"used {Fmt.Relative(t.LastUsedAt)}")@(t.ExpiresAt is null ? "" : $" · expires {Fmt.Relative(t.ExpiresAt)}")</span>
+                                    <Btn Size="sm" Variant="ghost" OnClick="() => RevokeTokenAsync(t)">Revoke</Btn>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <div class="row-wrap"><input class="ui-input" style="max-width:220px" placeholder="Token name" aria-label="Token name" @bind="_tokenName" /><select class="ui-select" style="max-width:150px" aria-label="Expires" @bind="_tokenDays"><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option><option value="0">Never expires</option></select><Btn Size="sm" Icon="plus" Busy="@(_busy == "token")" Disabled="@string.IsNullOrWhiteSpace(_tokenName)" OnClick="CreateTokenAsync">Create token</Btn></div>
+                </div>
+            </section>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Where you're signed in</h2></div>
+                <div class="doc-section__body">
+                    @if (_sessions is null) { <Skel Height="28px" /> }
+                    else
+                    {
+                        <div class="ui-list ui-list--inset">
+                            @foreach (var s in _sessions)
+                            {
+                                <div class="ui-list__row" style="grid-template-columns:minmax(0,1fr) auto auto">
+                                    <span style="min-width:0"><span class="ui-list__title" style="display:block">@Device(s.UserAgent)@(s.Current ? " · this browser" : "")</span><span class="ui-list__sub" style="display:block">@(s.Ip ?? "unknown address") · since @Fmt.Relative(s.CreatedAt)</span></span>
+                                    <span class="ui-list__meta">expires @Fmt.Relative(s.ExpiresAt)</span>
+                                    @if (!s.Current) { <Btn Size="sm" Variant="ghost" OnClick="() => RevokeSessionAsync(s)">Sign out</Btn> } else { <span></span> }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Section { get; set; }
+    [Inject] private BackoraJs Js { get; set; } = default!;
+    private string? _name, _currentPw, _newPw, _disablePw, _code, _twoFactorError, _tokenName, _newToken, _busy;
+    private int _tokenDays = 90;
+    private ApiResult? _profileResult, _pwResult;
+    private TwoFactorSetupResponse? _setup;
+    private IReadOnlyList<string>? _recoveryCodes;
+    private List<PersonalAccessTokenDto>? _tokens;
+    private List<SessionDto>? _sessions;
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        _name = CurrentUser.User?.Name;
+        var t = Api.Me.TokensAsync(); var s = Api.Me.SessionsAsync();
+        _tokens = (await t).Value; _sessions = (await s).Value;
+    }
+
+    private static string Device(string? ua) => ua switch
+    {
+        null or "" => "Unknown device",
+        _ when ua.Contains("Edg", StringComparison.Ordinal) => "Edge",
+        _ when ua.Contains("Chrome", StringComparison.Ordinal) => "Chrome",
+        _ when ua.Contains("Firefox", StringComparison.Ordinal) => "Firefox",
+        _ when ua.Contains("Safari", StringComparison.Ordinal) => "Safari",
+        _ when ua.Contains("curl", StringComparison.OrdinalIgnoreCase) => "Command line",
+        _ => "Browser",
+    } + (ua?.Contains("Mac OS", StringComparison.Ordinal) == true ? " on macOS" : ua?.Contains("Windows", StringComparison.Ordinal) == true ? " on Windows" : ua?.Contains("Linux", StringComparison.Ordinal) == true ? " on Linux" : "");
+
+    private async Task CopyAsync(string text) { await Js.InvokeVoidAsync("copyText", text); Toasts.Success("Copied"); }
+
+    private async Task SaveProfileAsync()
+    {
+        _busy = "profile";
+        _profileResult = await Api.Me.UpdateProfileAsync(new UpdateProfileRequest(_name!.Trim()));
+        _busy = null;
+        if (Handle(_profileResult, "Name saved", toastOnError: _profileResult.Outcome != ApiOutcome.ValidationFailed)) await CurrentUser.RefreshAsync();
+    }
+
+    private async Task ChangePasswordAsync()
+    {
+        _busy = "password";
+        _pwResult = await Api.Me.ChangePasswordAsync(new ChangePasswordRequest(_currentPw!, _newPw!));
+        _busy = null;
+        if (Handle(_pwResult, "Password changed", toastOnError: _pwResult.Outcome != ApiOutcome.ValidationFailed)) { _currentPw = _newPw = null; await CurrentUser.RefreshAsync(); }
+    }
+
+    private async Task StartTwoFactorAsync()
+    {
+        _busy = "2fa"; _twoFactorError = null;
+        var r = await Api.Me.SetupTwoFactorAsync();
+        _busy = null;
+        if (Handle(r)) _setup = r.Value;
+    }
+
+    private async Task EnableTwoFactorAsync()
+    {
+        _busy = "2fa"; _twoFactorError = null;
+        var r = await Api.Me.EnableTwoFactorAsync(new TwoFactorEnableRequest(_code!.Replace(" ", "", StringComparison.Ordinal)));
+        _busy = null;
+        if (r.Ok && r.Value is not null) { _setup = null; _code = null; _recoveryCodes = r.Value.RecoveryCodes; Toasts.Success("Two-step verification is on"); await CurrentUser.RefreshAsync(); return; }
+        if (r.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Unauthorized or ApiOutcome.Conflict) { _twoFactorError = r.Problem?.Detail ?? "That code didn't match. Try the next one."; return; }
+        Handle(r);
+    }
+
+    private async Task DisableTwoFactorAsync()
+    {
+        _busy = "2fa"; _twoFactorError = null;
+        var r = await Api.Me.DisableTwoFactorAsync(new TwoFactorDisableRequest(_disablePw!));
+        _busy = null; _disablePw = null;
+        if (r.Ok) { Toasts.Success("Two-step verification is off"); await CurrentUser.RefreshAsync(); return; }
+        if (r.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Unauthorized) { _twoFactorError = r.Problem?.Detail ?? "The password is incorrect."; return; }
+        Handle(r);
+    }
+
+    private async Task CreateTokenAsync()
+    {
+        _busy = "token";
+        var r = await Api.Me.CreateTokenAsync(new CreatePersonalAccessTokenRequest(_tokenName!.Trim(), _tokenDays == 0 ? null : _tokenDays));
+        _busy = null;
+        if (Handle(r) && r.Value is not null) { _newToken = r.Value.Token; _tokenName = null; _tokens = (await Api.Me.TokensAsync()).Value; }
+    }
+
+    private async Task RevokeTokenAsync(PersonalAccessTokenDto t) { if (Handle(await Api.Me.RevokeTokenAsync(t.Id), "Token revoked", t.Name)) _tokens = (await Api.Me.TokensAsync()).Value; }
+    private async Task RevokeSessionAsync(SessionDto s) { if (Handle(await Api.Me.RevokeSessionAsync(s.Id), "Signed out that session")) _sessions = (await Api.Me.SessionsAsync()).Value; }
+}

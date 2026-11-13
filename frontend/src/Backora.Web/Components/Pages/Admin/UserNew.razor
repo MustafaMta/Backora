@@ -1,0 +1,3 @@
+@page "/users/new"
+@* Inviting a user happens in the drawer on the Users page; this keeps old links working. *@
+@code { protected override void OnInitialized() => Nav.NavigateTo("/users?invite=1", replace: true); }

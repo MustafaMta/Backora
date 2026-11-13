@@ -1,0 +1,38 @@
+@page "/restores"
+<PageTitle>Restores · Backora</PageTitle>
+
+<PageHead Title="Restores" BackHref="/recovery" BackLabel="Recovery">
+    <Actions>@if (Can(Permissions.RestoresExecute)) { <Btn Variant="primary" Href="/restores/new" Icon="restore">Start a restore</Btn> }</Actions>
+    <Below><div class="viewbar"><RecoveryTabs Active="restores" /></div></Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load restores" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_page is null) { <ListSkel /> }
+    else if (_page.Items.Count == 0) { <Empty Art="restore" Title="No restores yet" Message="Restores write into a new folder and never overwrite a live database." /> }
+    else
+    {
+        <div class="ui-list__head cols-restore" aria-hidden="true"><span></span><span>Restore of</span><span>Reason</span><span>When</span><span>Status</span><span></span></div>
+        <div class="ui-list" role="list">
+            @foreach (var r in _page.Items)
+            {
+                <a class="ui-list__row cols-restore" href="/restores/@r.Id" role="listitem">
+                    <span class="ui-glyph"><Icon Name="restore" Size="14" /></span>
+                    <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none;max-width:60%">@r.JobName</span><span class="ui-list__sub">@(r.RequestedBy ?? "—")</span></span>
+                    <span class="ui-list__meta hide-sm">@(r.Reason ?? "—")</span>
+                    <span class="ui-list__meta hide-sm"><Ago Value="r.CreatedAt" /></span>
+                    <StatusBadge View="StatusMap.Restore(r.Status)" />
+                    <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                </a>
+            }
+        </div>
+        <Pager Page="1" PageSize="50" Total="_page.Total" One="restore" Many="restores" />
+    }
+</div>
+
+@code {
+    private PagedResult<RestoreSummaryDto>? _page;
+    private string? _error;
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync() { _error = null; var r = await Api.Restores.ListAsync(null, null, 1, 50); _error = ErrorOf(r); _page = r.Value; }
+}

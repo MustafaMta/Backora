@@ -1,0 +1,7 @@
+<div class="ui-list" aria-busy="true">
+    @for (var i = 0; i < Rows; i++)
+    {
+        <div class="ui-list__row" style="grid-template-columns:22px minmax(0,2fr) minmax(0,1fr) 100px"><Skel Width="20px" Height="20px" /><Skel Width="@($"{55 + (i * 7 % 30)}%")" /><Skel Width="60%" /><Skel Width="70px" /></div>
+    }
+</div>
+@code { [Parameter] public int Rows { get; set; } = 6; }

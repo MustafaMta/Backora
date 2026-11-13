@@ -1,0 +1,2 @@
+# Private network: certificates from Caddy's internal CA.
+tls internal

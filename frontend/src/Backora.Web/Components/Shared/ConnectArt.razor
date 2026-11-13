@@ -1,0 +1,19 @@
+@* How Backora reaches a server: Backora → execution host → SSH → server. Original vector, theme-aware. *@
+<svg viewBox="0 0 280 92" fill="none" role="img" aria-label="@($"Backora connects through the execution host {Host} over SSH to {Target}")" style="width:100%;height:auto">
+    <g stroke="var(--line-strong)" stroke-width="1.5" stroke-dasharray="3 4"><path d="M64 34h44" /><path d="M172 34h44" /></g>
+    <g fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"><rect x="4" y="12" width="60" height="44" rx="10" /><rect x="108" y="12" width="64" height="44" rx="10" /><rect x="216" y="12" width="60" height="44" rx="10" /></g>
+    <rect x="22" y="22" width="24" height="24" rx="6" fill="var(--accent)" /><circle cx="34" cy="34" r="3" fill="#fff" /><path d="M39.5 28.6A7.6 7.6 0 1 0 41.6 34" stroke="#fff" stroke-width="1.8" stroke-linecap="round" />
+    <g stroke="var(--flow)" stroke-width="1.6" stroke-linecap="round"><rect x="128" y="24" width="24" height="9" rx="2" /><rect x="128" y="36" width="24" height="9" rx="2" /><path d="M132 28.5h2M132 40.5h2" /></g>
+    <g stroke="var(--pg)" stroke-width="1.6"><ellipse cx="246" cy="27" rx="11" ry="4" /><path d="M235 27v13c0 2.2 4.9 4 11 4s11-1.8 11-4V27" /></g>
+    <g fill="var(--ink-3)" font-family="Geist, sans-serif" font-size="9.5" text-anchor="middle">
+        <text x="34" y="72">Backora</text><text x="140" y="72">Execution host</text><text x="246" y="72">This server</text>
+        <text x="140" y="84" font-family="Geist Mono, monospace" font-size="8.5">@Host</text>
+    </g>
+    <g fill="var(--ink-4)" font-family="Geist, sans-serif" font-size="8.5" text-anchor="middle"><text x="86" y="28">secure</text><text x="194" y="28">SSH</text></g>
+    <path d="m188 46 4 4 7-8" stroke="var(--ok-dot)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="@(Ok ? "1" : "0")" />
+</svg>
+@code {
+    [Parameter] public string Host { get; set; } = "execution host";
+    [Parameter] public string Target { get; set; } = "the server";
+    [Parameter] public bool Ok { get; set; }
+}

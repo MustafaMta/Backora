@@ -1,0 +1,158 @@
+@page "/restores/{Id:long}"
+@implements IAsyncDisposable
+<PageTitle>Restore · Backora</PageTitle>
+
+@if (_error is not null) { <PageHead Title="Restore" BackHref="/restores" BackLabel="Restores" /><Empty Error="true" Title="We couldn't load this restore" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+else if (_d is null) { <PageHead Title="Restore" BackHref="/restores" BackLabel="Restores" /><Loading Text="Loading restore…" /> }
+else
+{
+    var s = _d.Summary; var v = StatusMap.Restore(s.Status);
+    <PageHead Title="@($"Restore of {s.JobName}")" BackHref="/restores" BackLabel="Restores" Subtitle="@($"Requested by {s.RequestedBy ?? "—"} · {Fmt.Relative(s.CreatedAt)}")">
+        <Lead><span class="ui-glyph ui-glyph--lg ui-glyph--accent"><Icon Name="restore" Size="22" /></span></Lead>
+        <Suffix><StatusBadge View="v" /></Suffix>
+        <Actions>@if (!StatusMap.IsTerminal(s.Status) && s.Status != RestoreStatusDto.Cancelling && Can(Permissions.RestoresExecute)) { <Btn Icon="stop" Busy="_cancelling" OnClick="() => _confirmCancel = true">Cancel restore</Btn> }</Actions>
+    </PageHead>
+
+    <div class="detail app-page">
+        <div class="detail__main">
+            <div class="lead-figs"><span><Icon Name="file" Size="14" /><strong>@(s.FilesVerified ?? 0) of @(s.FilesExpected ?? 0)</strong> files verified</span></div>
+            <div class="detail__body">
+                @if (s.Status == RestoreStatusDto.AwaitingKey && Can(Permissions.RestoresExecute))
+                {
+                    <Panel Title="Waiting for your private key" Icon="private-key">
+                        <div class="stack">
+                            <KeyField Id="await-key" Value="@_key" ValueChanged="v => { _key = v; _keyError = null; }" Error="@_keyError" Disabled="_submitting" />
+                            @if (s.KeyRequestExpiresAt is not null) { <p class="xs muted">The request expires <Ago Value="s.KeyRequestExpiresAt" />.</p> }
+                            <div><Btn Variant="primary" Icon="unlock" Busy="_submitting" Disabled="@(!KeyField.LooksValid(_key))" OnClick="SubmitKeyAsync">Unlock and continue</Btn></div>
+                        </div>
+                    </Panel>
+                }
+                @if (s.Status is RestoreStatusDto.Completed)
+                {
+                    <div class="ui-callout ui-callout--ok"><Icon Name="circle-check" Size="15" /><div><strong>Restore finished.</strong> The files are in <span class="mono xs">@s.TargetPath</span>.</div></div>
+                }
+                else if (s.Status is RestoreStatusDto.Failed)
+                {
+                    <div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div><strong>@StatusMap.Failure(s.FailureClass).</strong> @StatusMap.FailureHint(s.FailureClass)</div></div>
+                }
+                else if (!StatusMap.IsTerminal(s.Status))
+                {
+                    <LiveFlow Stages="RestoreFlow(s)" Label="Restore progress" />
+                    <div class="stack-sm">
+                        <div class="row small"><span class="strong">@v.Label</span><span class="right muted num">@(s.ProgressPercent is { } pp ? $"{pp:0}%" : "")</span></div>
+                        <span class="ui-progress @(s.ProgressPercent is null ? "ui-progress--indeterminate" : "")" role="progressbar" aria-valuenow="@(s.ProgressPercent ?? 0)" aria-valuemin="0" aria-valuemax="100"><span style="width:@(string.Create(CultureInfo.InvariantCulture, $"{s.ProgressPercent ?? 35:0.#}%"))"></span></span>
+                        <p class="xs muted">@Fmt.Bytes(s.BytesTransferred) of @Fmt.Bytes(s.BytesTotal)</p>
+                    </div>
+                }
+                @if (_d.Timeline.Count > 0)
+                {
+                    <Panel Title="What happened">
+                        <ol class="timeline">
+                            @foreach (var t in _d.Timeline)
+                            {
+                                <li><span class="ui-dot ui-dot--@TimelineTone(t.Tone)"></span><span style="min-width:0"><span class="timeline__title" style="display:block">@t.Title</span>@if (t.Detail is not null) { <span class="timeline__detail" style="display:block">@t.Detail</span> }</span><span class="timeline__at" title="@Clock.Format(t.At, true)">@Fmt.Relative(t.At)</span></li>
+                            }
+                        </ol>
+                    </Panel>
+                }
+                <details class="ui-disclose">
+                    <summary><Icon Name="terminal" Size="14" />Technical details<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                    <div class="ui-disclose__body stack">
+                        <dl class="ui-props">
+                            <dt>Restore ID</dt><dd class="mono xs">@s.Id</dd>
+                            <dt>Recovery point</dt><dd class="mono xs">@s.RecoveryPointId</dd>
+                            <dt>Target folder</dt><dd class="mono xs">@s.TargetPath</dd>
+                            @if (s.DecryptionKeyFingerprint is not null) { <dt>Key fingerprint</dt><dd class="mono xs">@s.DecryptionKeyFingerprint</dd> }
+                        </dl>
+                        @if (s.ErrorMessage is not null) { <pre class="ui-code">@s.ErrorMessage</pre> }
+                        @if (!string.IsNullOrWhiteSpace(_d.Log)) { <pre class="ui-code">@_d.Log</pre> }
+                    </div>
+                </details>
+            </div>
+        </div>
+        <aside class="detail__aside" aria-label="Properties">
+            <div>
+                <div class="aside-title">Properties</div>
+                <dl class="ui-props">
+                    <dt>Copy from</dt><dd>@Clock.Format(_d.RecoveryPoint.CompletedAt ?? _d.RecoveryPoint.CreatedAt)</dd>
+                    <dt>Stored on</dt><dd>@_d.RecoveryPoint.DestinationName@(_d.RecoveryPoint.IsReplica ? " (DR)" : "")</dd>
+                    <dt>Server</dt><dd>@(s.ServerName ?? "—")</dd>
+                    <dt>Reason</dt><dd>@(s.Reason ?? "—")</dd>
+                    <dt>Started</dt><dd>@(s.StartedAt is null ? "—" : Clock.Format(s.StartedAt))</dd>
+                    <dt>Finished</dt><dd>@(s.CompletedAt is null ? "—" : Clock.Format(s.CompletedAt))</dd>
+                </dl>
+            </div>
+        </aside>
+    </div>
+    <Confirm @bind-Open="_confirmCancel" Title="Cancel this restore?" Icon="stop" Danger="true" ConfirmText="Cancel restore" CancelText="Keep going" Busy="_cancelling" OnConfirm="CancelAsync" Message="Files already written stay in the restore folder." />
+}
+
+@code {
+    [Parameter] public long Id { get; set; }
+    private RestoreDetailDto? _d;
+    private string? _error, _key, _keyError;
+    private bool _cancelling, _confirmCancel, _submitting;
+    private PeriodicTimer? _timer;
+
+    protected override async Task OnPageInitializedAsync() { await LoadAsync(); _ = PollAsync(); }
+
+    private async Task PollAsync()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(PageToken))
+            {
+                if (_d is null || StatusMap.IsTerminal(_d.Summary.Status)) continue;
+                var r = await Api.Restores.GetAsync(Id, PageToken);
+                if (r.Ok && r.Value is not null) { _d = r.Value; await InvokeAsync(StateHasChanged); }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Restores.GetAsync(Id, PageToken);
+        _error = r.StatusCode == 404 ? "This restore doesn't exist." : ErrorOf(r);
+        _d = r.Value;
+    }
+
+    private static string TimelineTone(string tone) => tone switch { "success" => "ok", "danger" => "bad", "warning" => "warn", "running" => "info", _ => "muted" };
+
+    private async Task CancelAsync()
+    {
+        _cancelling = true;
+        var r = await Api.Restores.CancelAsync(Id);
+        _cancelling = false; _confirmCancel = false;
+        if (Handle(r, "Cancelling restore")) await LoadAsync();
+    }
+
+    private async Task SubmitKeyAsync()
+    {
+        if (!KeyField.LooksValid(_key)) return;
+        _submitting = true;
+        var r = await Api.Restores.SubmitKeyAsync(Id, _key!.Trim());
+        _submitting = false;
+        if (r.Ok) { _key = null; Toasts.Success("Key accepted", "The restore continues."); await LoadAsync(); return; }
+        _key = null;
+        if (r.Outcome == ApiOutcome.Unauthorized) { RedirectToLogin(); return; }
+        _keyError = r.FieldError("PrivateKey") ?? r.Message;
+    }
+
+    public ValueTask DisposeAsync() { _key = null; _timer?.Dispose(); Dispose(); return ValueTask.CompletedTask; }
+
+    // Stages come straight from the restore status; the byte and file counts are the API's own.
+    private static IReadOnlyList<LiveFlow.Stage> RestoreFlow(RestoreSummaryDto s)
+    {
+        var step = s.Status switch { RestoreStatusDto.Pending => 0, RestoreStatusDto.AwaitingKey => 1, RestoreStatusDto.Running => 2, RestoreStatusDto.Verifying => 3, _ => -1 };
+        LiveFlow.FlowState At(int i) => step == -1 ? LiveFlow.FlowState.Pending : step > i ? LiveFlow.FlowState.Done : step == i ? (i == 1 ? LiveFlow.FlowState.Waiting : LiveFlow.FlowState.Active) : LiveFlow.FlowState.Pending;
+        return
+        [
+            new("clock", "Queued", step == 0 ? "Waiting for a worker" : "Picked up", step == 0 ? LiveFlow.FlowState.Active : LiveFlow.FlowState.Done),
+            new("private-key", "Unlock", step == 1 ? "Needs your key" : "If encrypted", At(1)),
+            new("download-cloud", "Restore data", s.BytesTotal > 0 ? $"{Fmt.Bytes(s.BytesTransferred)} of {Fmt.Bytes(s.BytesTotal)}" : "Transferring", At(2)),
+            new("verified", "Verify files", s.FilesExpected is > 0 ? $"{s.FilesVerified ?? 0} of {s.FilesExpected} files" : "Checksums", At(3)),
+        ];
+    }
+}

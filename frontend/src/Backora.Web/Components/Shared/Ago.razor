@@ -1,0 +1,8 @@
+@* Relative time ("5 minutes ago") with the exact local time on hover. *@
+@inject ClientClock Clock
+@if (Value is null) { <span class="muted">@Fallback</span> }
+else { <time datetime="@Value.Value.ToString("O")" title="@Clock.Format(Value)">@Fmt.Relative(Value)</time> }
+@code {
+    [Parameter] public DateTimeOffset? Value { get; set; }
+    [Parameter] public string Fallback { get; set; } = "—";
+}

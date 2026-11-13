@@ -1,0 +1,30 @@
+@* Page header: breadcrumb, title with optional resource glyph and state, one line of context, actions; then the toolbar. *@
+<header class="app-pagehead">
+    @if (BackHref is not null)
+    {
+        <nav class="app-crumbs" aria-label="Breadcrumb"><a href="@BackHref">@BackLabel</a><Icon Name="chevron-right" Size="12" Class="sep" /><span class="truncate">@Title</span></nav>
+    }
+    <div class="app-pagehead__row">
+        <div class="app-pagehead__title">
+            @Lead
+            <div style="min-width:0">
+                <h1 tabindex="-1"><span>@Title</span>@Suffix</h1>
+                @if (Subtitle is not null) { <p>@Subtitle</p> }
+            </div>
+        </div>
+        @if (Actions is not null) { <div class="app-pagehead__actions">@Actions</div> }
+    </div>
+    @if (Below is not null) { <div class="app-pagehead__below">@Below</div> }
+</header>
+@code {
+    [CascadingParameter(Name = "OpenNav")] public Action? OpenNav { get; set; }
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? BackHref { get; set; }
+    [Parameter] public string BackLabel { get; set; } = "Back";
+    [Parameter] public bool Resource { get; set; }
+    [Parameter] public RenderFragment? Lead { get; set; }
+    [Parameter] public RenderFragment? Suffix { get; set; }
+    [Parameter] public RenderFragment? Below { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

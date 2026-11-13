@@ -1,0 +1,107 @@
+/* ==========================================================================
+   Backora — premium surfaces and motion (inspired by react-bits: aurora,
+   blur-in text, animated lists, tilt, click spark).
+   Pure CSS plus js/fx.js (pointer position, tilt, sparks, page-enter flag).
+   Everything honours prefers-reduced-motion (foundation.css shortens motion).
+   ========================================================================== */
+
+:root {
+  --card-bg: linear-gradient(180deg, #ffffff 0%, #fcfcfe 100%);
+  --card-ring: 0 0 0 1px var(--line);
+  --card-lift: 0 1px 2px rgba(15, 20, 40, .04), 0 14px 34px -22px rgba(15, 20, 40, .2);
+  --card-hi: inset 0 1px 0 rgba(255, 255, 255, .9);
+  --spot: 99, 114, 255;      /* spotlight tint (rgb) */
+}
+:root[data-theme="dark"], .ui-dark {
+  --card-bg: linear-gradient(180deg, rgba(255, 255, 255, .032) 0%, rgba(255, 255, 255, .008) 100%), var(--surface);
+  --card-ring: 0 0 0 1px var(--line);
+  --card-lift: 0 1px 0 rgba(0, 0, 0, .35), 0 24px 48px -28px rgba(0, 0, 0, .9);
+  --card-hi: inset 0 1px 0 rgba(255, 255, 255, .055);
+  --spot: 120, 134, 255;
+}
+
+/* ── Premium card surface ─────────────────────────────────── */
+.ui-section, .ov-status, .inv, .summary, .lead-figs, .detail__aside, .plan, .plan-note, .lf, .ui-choices, .create-card, .ui-tile {
+  position: relative;
+  background: var(--card-bg);
+  box-shadow: var(--card-ring), var(--card-hi), var(--card-lift);
+  transition: box-shadow var(--t) var(--ease), transform .25s var(--ease-out), border-color var(--t) var(--ease);
+}
+.ui-tile { border-color: transparent; box-shadow: var(--card-ring), var(--card-hi), 0 1px 2px rgba(0, 0, 0, .04); }
+.ui-tile.fx-on { transform: perspective(800px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translateY(-2px); box-shadow: var(--card-ring), var(--card-hi), 0 18px 34px -20px rgba(var(--spot), .45); }
+.ui-tile[aria-checked="true"] { box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 5px var(--accent-soft), var(--card-hi), 0 14px 30px -18px rgba(var(--spot), .55); }
+
+/* Section heads: icon chip and a hairline that catches the light */
+.ui-section__head { position: relative; min-height: 54px; border-bottom-color: transparent; }
+.ui-section__head::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--line) 12%, var(--line) 88%, transparent); }
+.ui-section__head h2 { font-size: 14.5px; letter-spacing: -.012em; }
+.ui-section__head h2 .ui-icon { box-sizing: border-box; width: 28px; height: 28px; padding: 6px; border-radius: 8px; color: var(--accent); background: linear-gradient(180deg, var(--accent-soft-2), var(--accent-soft)); box-shadow: inset 0 0 0 1px var(--accent-soft-2), 0 6px 14px -8px rgba(var(--spot), .6); }
+
+/* Glyph tiles get depth */
+.ui-glyph { box-shadow: inset 0 0 0 1px var(--line-soft), inset 0 1px 0 rgba(255, 255, 255, .05); }
+.ui-glyph--accent, .ui-glyph--lg.ui-glyph--accent { background: linear-gradient(180deg, var(--accent-soft-2), var(--accent-soft)); box-shadow: inset 0 0 0 1px var(--accent-soft-2), 0 8px 18px -10px rgba(var(--spot), .6); }
+
+/* Inventory / stats: bigger numbers, gradient value, divider light */
+.inv__value { font-size: 24px; letter-spacing: -.03em; background: linear-gradient(180deg, var(--ink) 30%, color-mix(in srgb, var(--ink) 62%, var(--accent))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.inv__value small, .inv__value span { -webkit-text-fill-color: var(--ink-3); }
+.inv__item + .inv__item { box-shadow: -1px 0 0 var(--line-soft); }
+
+/* Status band: state-tinted aura behind the emblem */
+.ov-status { overflow: hidden; }
+.ov-status__emblem::before { content: ""; position: absolute; inset: -26px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--state, var(--accent)) 26%, transparent), transparent); animation: fx-breathe 4.5s ease-in-out infinite; }
+@keyframes fx-breathe { 50% { transform: scale(1.12); opacity: .7; } }
+
+/* Tables: header lettering, animated entrance */
+.ui-list__head, .ui-table th { letter-spacing: .07em; }
+.fx-enter .ui-list__row, .fx-enter .ui-table tbody tr, .fx-enter .ui-tile, .fx-enter .inv__item, .fx-enter .summary__item, .fx-enter .plan__row, .fx-enter .timeline > li { animation: fx-row .5s var(--ease-out) backwards; }
+@keyframes fx-row { from { opacity: 0; transform: translateY(6px); filter: blur(2px); } }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(2) { animation-delay: 30ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(3) { animation-delay: 60ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(4) { animation-delay: 90ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(5) { animation-delay: 120ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(6) { animation-delay: 150ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(7) { animation-delay: 180ms; }
+.fx-enter :is(.ui-list__row, .ui-tile, .inv__item, .summary__item, .plan__row, .timeline > li):nth-child(n+8) { animation-delay: 210ms; }
+
+/* Page titles: blur-in (BlurText) */
+.fx-enter .app-pagehead h1 { animation: fx-blur .7s var(--ease-out) backwards; }
+.fx-enter .app-pagehead p { animation: fx-blur .7s var(--ease-out) .08s backwards; }
+@keyframes fx-blur { from { opacity: 0; filter: blur(10px); transform: translateY(4px); } }
+
+/* ── Aurora behind every page header ──────────────────────── */
+.app-main { isolation: isolate; position: relative; }
+.app-aurora { position: absolute; z-index: -1; left: 0; right: 0; top: 0; height: 440px; overflow: hidden; pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .6) 55%, transparent 100%); mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .6) 55%, transparent 100%); }
+.app-aurora > span { position: absolute; border-radius: 50%; filter: blur(70px); opacity: var(--au, .1); will-change: transform; }
+.app-aurora > span:nth-child(1) { width: 560px; height: 260px; left: 6%; top: -110px; background: #5b6cff; animation: fx-au1 22s ease-in-out infinite alternate; }
+.app-aurora > span:nth-child(2) { width: 460px; height: 240px; left: 42%; top: -140px; background: #8b5cf6; animation: fx-au2 26s ease-in-out infinite alternate; }
+.app-aurora > span:nth-child(3) { width: 420px; height: 220px; right: 4%; top: -100px; background: #22b8c8; animation: fx-au3 30s ease-in-out infinite alternate; --au: .07; }
+.app-aurora::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 14%, transparent) 1px, transparent 1.3px); background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 70% at 50% 0%, #000, transparent 75%); mask-image: radial-gradient(ellipse 60% 70% at 50% 0%, #000, transparent 75%); opacity: .5; }
+:root[data-theme="dark"] .app-aurora > span { --au: .16; }
+:root[data-theme="dark"] .app-aurora > span:nth-child(3) { --au: .09; }
+@keyframes fx-au1 { to { transform: translate(120px, 40px) scale(1.15); } }
+@keyframes fx-au2 { to { transform: translate(-140px, 30px) scale(.9); } }
+@keyframes fx-au3 { to { transform: translate(-80px, 50px) scale(1.2); } }
+
+/* ── Primary action: animated edge light (StarBorder) + click spark ── */
+.ui-btn--primary::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: conic-gradient(from var(--fx-ang, 0deg), transparent 0 70%, rgba(255, 255, 255, .85) 82%, transparent 94%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0; transition: opacity .3s var(--ease); animation: fx-orbit 2.4s linear infinite; }
+.ui-btn--primary:hover::after { opacity: .9; }
+.ui-btn--primary[aria-busy="true"]::after { opacity: 1; background: none; border: 1.8px solid var(--brand-on); border-top-color: transparent; border-radius: 50%; padding: 0; inset: auto; width: 15px; height: 15px; -webkit-mask: none; mask: none; animation: ui-rot .7s linear infinite; }
+@property --fx-ang { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@keyframes fx-orbit { to { --fx-ang: 360deg; } }
+.fx-sparks { position: fixed; inset: 0; z-index: 400; pointer-events: none; }
+.fx-spark { position: absolute; width: 2px; height: 9px; border-radius: 2px; background: linear-gradient(var(--accent), transparent); transform-origin: 50% 0; animation: fx-spark .45s var(--ease-out) forwards; }
+@keyframes fx-spark { from { opacity: 1; transform: rotate(var(--a)) translateY(4px) scaleY(1); } to { opacity: 0; transform: rotate(var(--a)) translateY(18px) scaleY(.3); } }
+
+/* Live pipeline: a slow sheen across the card while work is running */
+.lf::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(100deg, transparent 30%, rgba(var(--spot), .07) 50%, transparent 70%); background-size: 250% 100%; animation: fx-sheen 4s linear infinite; }
+@keyframes fx-sheen { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-aurora > span, .ov-status__emblem::before, .ui-btn--primary::after, .lf::before { animation: none; }
+  .ui-tile.fx-on { transform: none; }
+}

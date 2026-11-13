@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/TestResults/
+.local/
+tests/
+docs/
+deploy/
+database/
+!database/templates/
+*.user

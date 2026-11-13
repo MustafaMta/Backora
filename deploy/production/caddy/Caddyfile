@@ -1,0 +1,27 @@
+# Backora V2 — TLS reverse proxy. BACKORA_TLS_MODE picks how certificates are obtained:
+#   acme     public DNS name: automatic Let's Encrypt certificates (needs ports 80/443 reachable from the internet)
+#   internal private network: Caddy's own CA (install its root on clients: docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt .)
+#   files    your company certificate: put tls.crt (full chain) and tls.key in deploy/production/certs/
+{
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+{$BACKORA_DOMAIN} {
+	import tls-{$BACKORA_TLS_MODE}.caddy
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		-Server
+	}
+	# Blazor Server uses WebSockets; Caddy proxies them and forwards X-Forwarded-Proto/For.
+	reverse_proxy frontend:8080 {
+		health_uri /health
+		health_interval 15s
+	}
+	log {
+		output stdout
+		format json
+	}
+}

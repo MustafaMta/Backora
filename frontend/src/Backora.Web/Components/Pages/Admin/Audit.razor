@@ -1,0 +1,82 @@
+@page "/audit"
+<PageTitle>Audit log · Backora</PageTitle>
+
+<PageHead Title="Audit log" BackHref="/users" BackLabel="Users &amp; access">
+    <Below>
+        <div class="viewbar">
+            <AccessTabs Active="audit" />
+            <span style="width:1px;height:16px;background:var(--line)"></span>
+            <nav class="ui-tabs" aria-label="Outcome">
+                @foreach (var f in Filters) { <button type="button" aria-selected="@(_filter == f.Key ? "true" : "false")" @onclick="() => SetFilter(f.Key)">@f.Label</button> }
+            </nav>
+            <div class="viewbar__end"><SearchBox Placeholder="Filter by person" Value="@_actor" OnSearch="ActorAsync" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load the audit log" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_page is null) { <ListSkel /> }
+    else if (_page.Items.Count == 0) { <Empty Icon="audit" Title="No events here" Message="Every sign-in and change is recorded." /> }
+    else
+    {
+        <div class="ui-list__head cols-audit" aria-hidden="true"><span></span><span>What happened</span><span>Who</span><span>Where</span><span>When</span></div>
+        <div class="ui-list" role="list">
+            @foreach (var e in _page.Items)
+            {
+                var open = _open.Contains(e.Id);
+                <button type="button" class="ui-list__row cols-audit" aria-expanded="@(open ? "true" : "false")" @onclick="() => Toggle(e.Id)">
+                    <StatusBadge View="StatusMap.Audit(e.Outcome)" IconOnly="true" />
+                    <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none;max-width:60%">@Describe(e.Action)</span><span class="ui-list__sub">@e.ResourceType @e.ResourceId</span></span>
+                    <span class="ui-list__meta hide-sm">@e.ActorName</span>
+                    <span class="ui-list__meta hide-sm mono">@(e.ActorIp ?? "—")</span>
+                    <span class="ui-list__meta" title="@Clock.Format(e.OccurredAt, true)"><Ago Value="e.OccurredAt" /></span>
+                </button>
+                @if (open)
+                {
+                    <div style="padding:8px var(--gutter) 14px 52px;border-bottom:1px solid var(--line-soft)">
+                        <dl class="ui-props" style="max-width:560px">
+                            <dt>Action</dt><dd class="mono xs">@e.Action</dd>
+                            <dt>Time</dt><dd>@Clock.Format(e.OccurredAt, true)</dd>
+                            @if (e.CorrelationId is not null) { <dt>Correlation</dt><dd class="mono xs">@e.CorrelationId</dd> }
+                        </dl>
+                        @if (!string.IsNullOrWhiteSpace(e.DetailsJson)) { <pre class="ui-code" style="margin-top:8px">@e.DetailsJson</pre> }
+                    </div>
+                }
+            }
+        </div>
+        <Pager Page="_pageNo" PageSize="PageSize" Total="_page.Total" One="event" Many="events" OnChange="GoAsync" />
+    }
+</div>
+
+@code {
+    private const int PageSize = 50;
+    private PagedResult<AuditEventDto>? _page;
+    private readonly HashSet<long> _open = [];
+    private string? _error, _actor;
+    private string _filter = "all";
+    private int _pageNo = 1;
+    private static readonly (string Key, string Label)[] Filters = [("all", "All"), ("failure", "Failed"), ("denied", "Denied")];
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        AuditOutcomeDto? o = _filter switch { "failure" => AuditOutcomeDto.Failure, "denied" => AuditOutcomeDto.Denied, _ => null };
+        var r = await Api.Audit.ListAsync(new AuditFilter(Actor: _actor, Outcome: o), _pageNo, PageSize);
+        _error = ErrorOf(r); _page = r.Value;
+    }
+
+    /// <summary>"backup_run.cancel_requested" → "Backup run cancel requested".</summary>
+    private static string Describe(string action)
+    {
+        var text = action.Replace('.', ' ').Replace('_', ' ').Trim();
+        return text.Length == 0 ? action : char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
+    private void Toggle(long id) { if (!_open.Remove(id)) _open.Add(id); }
+    private Task SetFilter(string k) { _filter = k; _pageNo = 1; _page = null; return LoadAsync(); }
+    private Task ActorAsync(string? a) { _actor = a; _pageNo = 1; return LoadAsync(); }
+    private Task GoAsync(int p) { _pageNo = p; return LoadAsync(); }
+}

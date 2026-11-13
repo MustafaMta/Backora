@@ -1,0 +1,90 @@
+@page "/login"
+@inject AuthService Auth
+@inject NavigationManager Nav
+@inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider Protection
+
+<PageTitle>Sign in · Backora</PageTitle>
+
+<h1>Sign in</h1>
+<p>Use your Backora account to manage protection and recovery.</p>
+
+<EditForm Model="Model" FormName="login" OnValidSubmit="SubmitAsync" method="post" novalidate>
+    <DataAnnotationsValidator />
+    @if (_error is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="16" /><div>@_error</div></div> }
+    else if (SignedOut) { <div class="ui-callout ui-callout--ok" role="status"><Icon Name="circle-check" Size="16" /><div>You have been signed out.</div></div> }
+    <FormField Label="Email" For="email">
+        <InputText id="email" class="ui-input" @bind-Value="Model.Email" autocomplete="username" type="email" aria-required="true" autofocus />
+        <ValidationMessage For="() => Model.Email" class="ui-error" />
+    </FormField>
+    <FormField Label="Password" For="password">
+        <div class="app-auth__pw">
+            <InputText id="password" class="ui-input" @bind-Value="Model.Password" autocomplete="current-password" type="password" aria-required="true" />
+            <button type="button" class="app-auth__pw-btn" data-pw-toggle aria-controls="password" aria-pressed="false" aria-label="Show password" hidden><Icon Name="eye" Size="16" Class="app-auth__pw-show" /><Icon Name="eye-off" Size="16" Class="app-auth__pw-hide" /></button>
+        </div>
+        <div class="app-auth__capslock" data-capslock role="status" hidden><Icon Name="alert" Size="12" />Caps Lock is on</div>
+        <ValidationMessage For="() => Model.Password" class="ui-error" />
+    </FormField>
+    <input type="hidden" name="Model.ReturnUrl" value="@Model.ReturnUrl" />
+    <Btn Type="submit" Variant="primary" Size="lg" Block="true">Continue</Btn>
+    <p class="app-auth__help">Need access? Ask your Backora administrator for an invitation.</p>
+</EditForm>
+
+@code {
+    private LoginModel Model => Input ??= new();
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm(FormName = "login", Name = "Model")] private LoginModel? Input { get; set; }
+    [SupplyParameterFromQuery(Name = "signedOut")] private string? SignedOutQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "returnUrl")] private string? ReturnUrlParam { get; set; }
+    private string? _error;
+    private bool SignedOut => SignedOutQuery == "1" && _error is null;
+
+    protected override void OnInitialized()
+    {
+        Model.ReturnUrl ??= ReturnUrlParam;
+        if (HttpMethods.IsGet(HttpContext.Request.Method) && HttpContext.User.Identity?.IsAuthenticated == true) Nav.NavigateTo(ReturnUrl.Sanitize(Model.ReturnUrl));
+    }
+
+    private async Task SubmitAsync()
+    {
+        var result = await Auth.LoginAsync(Model.Email.Trim(), Model.Password, HttpContext.RequestAborted);
+        if (!result.Ok || result.Value is null)
+        {
+            _error = result.Outcome switch
+            {
+                ApiOutcome.Unauthorized or ApiOutcome.ValidationFailed => result.Problem?.Detail ?? "The email or password is incorrect.",
+                ApiOutcome.RateLimited => "Too many sign-in attempts. Wait a minute and try again.",
+                ApiOutcome.Forbidden => result.Problem?.Detail ?? "This account is locked or disabled.",
+                ApiOutcome.NetworkError => "Backora can't reach its service right now. Try again shortly.",
+                _ => result.Problem?.Detail ?? "Sign-in failed. Try again.",
+            };
+            Model.Password = string.Empty;
+            return;
+        }
+        var target = ReturnUrl.Sanitize(Model.ReturnUrl);
+        if (result.Value.RequiresTwoFactor && result.Value.TwoFactorToken is not null)
+        {
+            var protector = Protection.CreateProtector("Backora.TwoFactor").ToTimeLimitedDataProtector();
+            HttpContext.Response.Cookies.Append(TwoFactorCookieName, protector.Protect(result.Value.TwoFactorToken, TimeSpan.FromMinutes(5)), new CookieOptions
+            {
+                HttpOnly = true, Secure = HttpContext.Request.IsHttps, SameSite = SameSiteMode.Strict, Path = "/", MaxAge = TimeSpan.FromMinutes(5), IsEssential = true,
+            });
+            Nav.NavigateTo($"/login/2fa?returnUrl={Uri.EscapeDataString(target)}");
+            return;
+        }
+        if (result.Value.Tokens is null) { _error = "Sign-in failed: the server returned no session."; return; }
+        await Auth.SignInAsync(HttpContext, result.Value.Tokens);
+        Nav.NavigateTo(target);
+    }
+
+    private string TwoFactorCookieName => HttpContext.Request.IsHttps ? BffClaims.TwoFactorCookie : "backora.2fa";
+
+    public sealed class LoginModel
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Enter your email address.")]
+        [System.ComponentModel.DataAnnotations.EmailAddress(ErrorMessage = "Enter a valid email address.")]
+        public string Email { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Enter your password.")]
+        public string Password { get; set; } = string.Empty;
+        public string? ReturnUrl { get; set; }
+    }
+}

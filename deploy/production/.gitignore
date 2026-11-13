@@ -1,0 +1,6 @@
+.env
+secrets/*
+!secrets/README.md
+certs/*
+!certs/README.md
+env/

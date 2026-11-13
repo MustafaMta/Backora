@@ -1,0 +1,21 @@
+<div class="ui-empty @(Compact ? "ui-empty--compact" : null) @(Error ? "ui-empty--error" : null)" role="@(Error ? "alert" : null)">
+    <span class="ui-empty__icon" aria-hidden="true"><Icon Name="@IconName" Size="@(Compact ? 15 : 17)" /></span>
+    <h3>@Title</h3>
+    @if (Message is not null) { <p>@Message</p> }
+    @if (Actions is not null) { <div class="ui-empty__actions">@Actions</div> }
+</div>
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Message { get; set; }
+    /// <summary>Topic of the empty state; picks a quiet icon (no illustrations inside the app).</summary>
+    [Parameter] public string? Art { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool Compact { get; set; }
+    [Parameter] public bool Error { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    private string IconName => Error ? "circle-alert" : Icon ?? Art switch
+    {
+        "welcome" => "sparkles", "backups" => "jobs", "servers" => "server", "storage" => "s3", "dr" => "topology",
+        "encryption" => "lock", "restore" => "restore", "success" => "circle-check", "search" => "search", _ => "circle-dashed",
+    };
+}

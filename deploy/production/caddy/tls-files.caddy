@@ -1,0 +1,2 @@
+# Your own certificate (full chain + key) from deploy/production/certs/.
+tls /certs/tls.crt /certs/tls.key

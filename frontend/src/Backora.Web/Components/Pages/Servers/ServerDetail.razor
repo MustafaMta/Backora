@@ -1,0 +1,157 @@
+@page "/servers/{Id:long}"
+<PageTitle>@(_s?.Name ?? "Server") · Backora</PageTitle>
+
+@if (_error is not null) { <PageHead Title="Server" BackHref="/servers" BackLabel="Servers" /><Empty Error="true" Title="We couldn't load this server" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+else if (_s is null) { <PageHead Title="Server" BackHref="/servers" BackLabel="Servers" /><Loading Text="Loading server…" /> }
+else
+{
+    var s = _s;
+    <PageHead Title="@s.Name" BackHref="/servers" BackLabel="Protected servers" Subtitle="@(s.Description ?? $"{s.SshUser}@{s.Host}")">
+        <Lead><span class="ui-glyph ui-glyph--lg ui-glyph--accent"><Icon Name="server" Size="22" /></span></Lead>
+        <Suffix><StatusBadge View="ServersList.State(s, _jobs)" /></Suffix>
+        <Actions>
+            @if (Can(Permissions.ServersWrite))
+            {
+                <Btn Href="@($"/servers/{s.Id}/edit")" Icon="edit">Edit</Btn>
+                <Dropdown AriaLabel="More actions" ButtonClass="ui-btn ui-btn--ghost ui-btn--icon">
+                    <Trigger><Icon Name="more" Size="16" /></Trigger>
+                    <ChildContent><button type="button" class="ui-menu__item ui-menu__item--danger" @onclick="() => _confirmDelete = true"><Icon Name="trash" Size="15" />Delete server…</button></ChildContent>
+                </Dropdown>
+            }
+            @if (Can(Permissions.ServersTest)) { <Btn Variant="primary" Icon="plug" Busy="_testing" OnClick="TestAsync">Test connection</Btn> }
+        </Actions>
+    </PageHead>
+
+    <div class="detail app-page">
+        <div class="detail__main">
+            <div class="lead-figs">
+                <span><Icon Name="jobs" Size="14" /><strong>@Ui.Plural(s.JobCount, "backup", "backups")</strong></span>
+                <span><Icon Name="circle-check" Size="14" />Last backup <strong>@(s.LastBackupAt is null ? "never" : Fmt.Relative(s.LastBackupAt))</strong></span>
+            </div>
+            <div class="detail__body">
+                @if (Created == 1)
+                {
+                    <div class="result result--ok"><StatusBadge View="AddedView" IconOnly="true" /><div style="min-width:0"><b>@s.Name is added.</b><small>@(s.HostKeyTrustedAt is null ? "Next, test the connection and confirm its identity, then protect it with a backup job." : "Protect it with a backup job next.")</small></div>
+                        @if (Can(Permissions.JobsWrite)) { <Btn Size="sm" Variant="primary" Href="@($"/jobs/new?serverId={s.Id}{(Engine is null ? "" : $"&engine={Engine}")}")" Icon="shield-check" Class="right">Protect this server</Btn> }
+                    </div>
+                }
+                @if (_test is not null)
+                {
+                    <div class="ui-callout @(_test.Success ? "ui-callout--ok" : "ui-callout--bad")"><Icon Name="@(_test.Success ? "circle-check" : "circle-alert")" Size="15" /><div><strong>@(_test.Success ? "Connected." : "Couldn't connect.")</strong> @_test.Message</div></div>
+                }
+                @if (PendingFingerprint is { } fp && Can(Permissions.ServersWrite))
+                {
+                    <div class="ui-callout ui-callout--warn">
+                        <Icon Name="shield-alert" Size="15" />
+                        <div class="stack-sm">
+                            <div><strong>Confirm this server's identity.</strong> Check the fingerprint with the server's administrator, then trust it. Backups can't run until you do.</div>
+                            <code class="mono xs">@fp</code>
+                            <div><Btn Size="sm" Icon="shield-check" Busy="_trusting" OnClick="() => _confirmTrust = true">Trust this key</Btn></div>
+                        </div>
+                    </div>
+                }
+                <Panel Title="Backups on this server" Flush="true">
+                    <Actions>@if (Can(Permissions.JobsWrite)) { <a href="/jobs/new">New backup</a> }</Actions>
+                    <ChildContent>
+                        @if (_jobs is null) { <div style="padding:14px 18px"><Skel Height="28px" /></div> }
+                        else if (_jobs.Count == 0) { <p class="muted" style="padding:14px 18px">Nothing on this server is backed up yet.</p> }
+                        else
+                        {
+                            <div class="ui-list ui-list--inset">
+                                @foreach (var j in _jobs)
+                                {
+                                    <a class="ui-list__row" style="grid-template-columns:22px minmax(0,1fr) auto 108px" href="/jobs/@j.Id">
+                                        <span class="ui-glyph @Ui.EngineGlyph(j.Category)"><Icon Name="@Ui.Engine(j.Category)" Size="14" /></span>
+                                        <span class="ui-list__title">@j.Name</span>
+                                        <span class="ui-list__meta hide-sm">@(j.LastSuccessAt is null ? "never" : Fmt.Relative(j.LastSuccessAt))</span>
+                                        <StatusBadge View="Backora.Web.Components.Pages.Backups.Backups.State(j)" />
+                                    </a>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </Panel>
+            </div>
+        </div>
+        <aside class="detail__aside" aria-label="Properties">
+            <div>
+                <div class="aside-title">Connection</div>
+                <dl class="ui-props">
+                    <dt>Address</dt><dd class="mono xs">@s.Host:@s.SshPort</dd>
+                    <dt>User</dt><dd class="mono xs">@s.SshUser</dd>
+                    <dt>Key</dt><dd>@(s.HasPrivateKey ? "Its own key" : "Default key")</dd>
+                    <dt>Identity</dt><dd>@(s.HostKeyTrustedAt is null ? "Not trusted" : $"Trusted {Fmt.Relative(s.HostKeyTrustedAt)}")</dd>
+                    <dt>Last test</dt><dd>@(s.LastConnectionTestAt is null ? "Never" : $"{(s.LastConnectionTestSucceeded == true ? "Passed" : "Failed")} {Fmt.Relative(s.LastConnectionTestAt)}")</dd>
+                </dl>
+            </div>
+            <details class="ui-disclose">
+                <summary><Icon Name="settings" Size="14" />Technical details<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                <div class="ui-disclose__body">
+                    <dl class="ui-props">
+                        <dt>Host key</dt><dd class="mono xs">@(s.HostKeyFingerprint ?? "—")</dd>
+                        <dt>Last message</dt><dd class="xs">@(s.LastConnectionTestMessage ?? "—")</dd>
+                        <dt>Server ID</dt><dd class="mono xs">@s.Id</dd>
+                        <dt>Added</dt><dd>@Clock.Format(s.CreatedAt)</dd>
+                    </dl>
+                    <p class="xs muted" style="margin-top:8px">Backora reaches this server through the <a href="/execution-host">execution host</a>.</p>
+                </div>
+            </details>
+        </aside>
+    </div>
+    <Confirm @bind-Open="_confirmTrust" Title="Trust this host key?" Icon="shield-check" ConfirmText="Trust key" Busy="_trusting" OnConfirm="TrustAsync" Message="@($"Backora will only connect to {s.Name} while it presents this key: {PendingFingerprint}")" />
+    <Confirm @bind-Open="_confirmDelete" Title="Delete this server?" Danger="true" Icon="trash" ConfirmText="Delete server" Busy="_deleting" RequireText="@s.Name" OnConfirm="DeleteAsync" Message="Servers with backups can't be deleted. Delete their backups first." />
+}
+
+@code {
+    [Parameter] public long Id { get; set; }
+    private static readonly StatusView AddedView = new("Added", StatusTone.Success);
+    [SupplyParameterFromQuery(Name = "created")] public int? Created { get; set; }
+    [SupplyParameterFromQuery(Name = "engine")] public string? Engine { get; set; }
+    private ServerDto? _s;
+    private List<BackupJobDto>? _jobs;
+    private ConnectionTestResultDto? _test;
+    private string? _error;
+    private bool _testing, _trusting, _deleting, _confirmDelete, _confirmTrust;
+
+    private string? PendingFingerprint => _test is { TargetFingerprint: { } fp, TargetFingerprintTrusted: false } ? fp
+        : _s is { HostKeyTrustedAt: null, HostKeyFingerprint: { } f } ? f : null;
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Servers.GetAsync(Id);
+        _error = r.StatusCode == 404 ? "This server doesn't exist or was deleted." : ErrorOf(r);
+        _s = r.Value;
+        if (_s is not null && Can(Permissions.JobsRead)) { var j = await Api.Jobs.ListAsync(new JobFilter(ServerId: Id), 1, 100, "name"); _jobs = j.Value?.Items.ToList() ?? []; }
+    }
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        var r = await Api.Servers.TestAsync(Id);
+        _testing = false;
+        if (!Handle(r) || r.Value is null) return;
+        _test = r.Value;
+        await LoadAsync();
+    }
+
+    private async Task TrustAsync()
+    {
+        if (PendingFingerprint is not { } fp) return;
+        _trusting = true;
+        var r = await Api.Servers.TrustHostKeyAsync(Id, fp);
+        _trusting = false; _confirmTrust = false;
+        if (Handle(r, "Host key trusted", fp)) { if (_test is not null) _test = _test with { TargetFingerprintTrusted = true }; await LoadAsync(); }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _deleting = true;
+        var r = await Api.Servers.DeleteAsync(Id);
+        _deleting = false;
+        if (r.Ok) { _confirmDelete = false; Toasts.Success("Server deleted"); Nav.NavigateTo("/servers"); return; }
+        if (r.Outcome == ApiOutcome.Conflict) { _confirmDelete = false; Toasts.Error("Server is in use", r.Message); return; }
+        Handle(r);
+    }
+}

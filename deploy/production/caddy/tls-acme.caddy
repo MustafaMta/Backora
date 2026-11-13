@@ -1,0 +1,2 @@
+# Automatic public certificates (Let's Encrypt). Contact address comes from ACME_EMAIL.
+tls {$ACME_EMAIL}

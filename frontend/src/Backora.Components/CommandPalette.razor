@@ -1,0 +1,61 @@
+@implements IDisposable
+@inject NavigationManager Nav
+@* Raycast-style command palette: pages and actions instantly, live search after a short pause. *@
+<Dialog Open="Open" OpenChanged="Changed" Title="Search" Large="true" InitialFocus="input">
+    <div class="ui-palette">
+        <div class="ui-palette__input">
+            <Icon Name="search" Size="18" />
+            <input type="text" placeholder="Search backups, servers, storage… or jump to a page" aria-label="Search" role="combobox" aria-expanded="true"
+                   aria-controls="pal-list" aria-activedescendant="@(_items.Count > 0 ? $"pal-{_active}" : null)" autocomplete="off" spellcheck="false"
+                   value="@_q" @oninput="Input" @onkeydown="Key" />
+            @if (_busy) { <span class="ui-spinner" aria-hidden="true"></span> }
+        </div>
+        <ul class="ui-palette__list" id="pal-list" role="listbox" aria-label="Results">
+            @if (_items.Count == 0) { <li class="ui-empty" style="padding:28px"><p>@(_q.Length == 0 ? "Type to search." : _busy ? "Searching…" : "No matches.")</p></li> }
+            @{ string? group = null; }
+            @for (var i = 0; i < _items.Count; i++)
+            {
+                var it = _items[i]; var idx = i;
+                if (it.Group != group) { group = it.Group; <li class="ui-palette__group" role="presentation">@group</li> }
+                <li id="pal-@idx" class="ui-palette__item" role="option" aria-selected="@(idx == _active ? "true" : "false")" @onclick="() => Go(it)" @onmouseenter="() => _active = idx">
+                    <Icon Name="@it.Icon" Size="16" /><span class="truncate">@it.Title</span>@if (it.Subtitle is not null) { <small class="truncate">@it.Subtitle</small> }
+                </li>
+            }
+        </ul>
+        <div class="ui-palette__foot"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
+    </div>
+</Dialog>
+@code {
+    public sealed record Entry(string Group, string Title, string? Subtitle, string Href, string Icon);
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public IReadOnlyList<Entry> Pages { get; set; } = [];
+    [Parameter] public Func<string, CancellationToken, Task<IReadOnlyList<Entry>>>? Search { get; set; }
+    private string _q = ""; private int _active; private bool _busy; private List<Entry> _items = []; private CancellationTokenSource? _cts;
+    protected override void OnParametersSet() { if (Open && _q.Length == 0) _items = Pages.ToList(); }
+    private async Task Changed(bool v) { Open = v; if (!v) { _q = ""; _active = 0; } await OpenChanged.InvokeAsync(v); }
+    private async Task Input(ChangeEventArgs e)
+    {
+        _q = e.Value?.ToString() ?? ""; _active = 0;
+        var local = Pages.Where(p => p.Title.Contains(_q, StringComparison.OrdinalIgnoreCase)).ToList();
+        _items = local;
+        _cts?.Cancel(); _cts = new CancellationTokenSource(); var ct = _cts.Token;
+        if (Search is null || _q.Trim().Length < 2) return;
+        try
+        {
+            await Task.Delay(220, ct); _busy = true; StateHasChanged();
+            var found = await Search(_q.Trim(), ct);
+            if (!ct.IsCancellationRequested) _items = local.Concat(found).ToList();
+        }
+        catch (OperationCanceledException) { }
+        finally { _busy = false; }
+    }
+    private async Task Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "ArrowDown" && _items.Count > 0) _active = (_active + 1) % _items.Count;
+        else if (e.Key == "ArrowUp" && _items.Count > 0) _active = (_active - 1 + _items.Count) % _items.Count;
+        else if (e.Key == "Enter" && _items.Count > 0) await Go(_items[_active]);
+    }
+    private async Task Go(Entry it) { await Changed(false); Nav.NavigateTo(it.Href); }
+    public void Dispose() => _cts?.Cancel();
+}

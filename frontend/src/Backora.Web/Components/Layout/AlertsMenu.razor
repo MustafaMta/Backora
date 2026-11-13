@@ -1,0 +1,42 @@
+@implements IDisposable
+@inject DashboardClient Dashboard
+@inject UserContext CurrentUser
+@* Notification bell: live attention items from the backend (no invented alerts). *@
+@if (CurrentUser.Can(Permissions.DashboardRead))
+{
+    <Dropdown ButtonClass="app-top__btn" AriaLabel="@($"Alerts ({_alerts.Count})")" Class="app-alerts-anchor">
+        <Trigger><Icon Name="bell" Size="18" />@if (_alerts.Count > 0) { <span class="ui-count @(_alerts.Any(a => a.Tone == "bad") ? "ui-count--bad" : "")">@_alerts.Count</span> }</Trigger>
+        <ChildContent>
+            <div class="app-alerts__head"><span>Alerts</span><span class="xs muted">@(_alerts.Count == 0 ? "All clear" : Ui.Plural(_alerts.Count, "open item", "open items"))</span></div>
+            <div class="app-alerts__list">
+                @if (_alerts.Count == 0) { <p class="xs muted" style="padding:14px 10px">Nothing needs attention right now.</p> }
+                @foreach (var a in _alerts.Take(12))
+                {
+                    <a class="app-alerts__item" href="@a.Href">
+                        <span class="ui-status ui-status--@a.Tone"><StatusIcon Kind="@(a.Tone == "bad" ? "bad" : "warn")" /></span>
+                        <span style="min-width:0"><b>@a.Title</b><small>@a.Detail</small></span>
+                    </a>
+                }
+            </div>
+            <div class="app-alerts__foot"><a class="link" href="/">Open the overview</a></div>
+        </ChildContent>
+    </Dropdown>
+}
+@code {
+    private List<ProtectionIssue> _alerts = [];
+    private Timer? _timer;
+    protected override async Task OnInitializedAsync() => await CurrentUser.EnsureLoadedAsync();
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first || !CurrentUser.Can(Permissions.DashboardRead)) return;
+        await Load(); StateHasChanged();
+        _timer = new Timer(_ => InvokeAsync(async () => { await Load(); StateHasChanged(); }), null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+    private async Task Load()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var r = await Dashboard.GetAsync(now.AddDays(-14), now);
+        if (r.Ok && r.Value is not null) _alerts = ProtectionIssues.From(r.Value).OrderByDescending(a => a.Tone == "bad").ToList();
+    }
+    public void Dispose() => _timer?.Dispose();
+}

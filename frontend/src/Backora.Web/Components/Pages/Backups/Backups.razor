@@ -1,0 +1,206 @@
+@page "/jobs"
+<PageTitle>Backup jobs · Backora</PageTitle>
+
+<PageHead Title="Backup jobs" Subtitle="What is protected, how often, and whether it's working.">
+    <Actions>@if (Can(Permissions.JobsWrite)) { <Btn Variant="primary" Href="/jobs/new" Icon="plus">Create backup</Btn> }</Actions>
+    <Below>
+        <div class="viewbar">
+            <nav class="ui-tabs" aria-label="Views">
+                @foreach (var f in Filters)
+                {
+                    <button type="button" aria-selected="@(_filter == f.Key ? "true" : "false")" @onclick="() => SetFilter(f.Key)">@f.Label<span class="ui-count">@Count(f.Key)</span></button>
+                }
+            </nav>
+            <div class="viewbar__end"><SearchBox Placeholder="Search jobs or servers" Value="@_q" OnSearch="q => { _q = q; }" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load backup jobs" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_all is null) { <ListSkel /> }
+    else if (_all.Count == 0)
+    {
+        <Empty Art="backups" Title="No backup jobs yet" Message="Choose a database, where copies go and how often. Backora takes care of the rest.">
+            <Actions>@if (Can(Permissions.JobsWrite)) { <Btn Variant="primary" Href="/jobs/new" Icon="plus">Create backup</Btn> }</Actions>
+        </Empty>
+    }
+    else
+    {
+        var rows = Rows.ToList();
+        @if (_selected.Count > 0)
+        {
+            <div class="bulkbar" role="toolbar" aria-label="Selected jobs">
+                <span>@Ui.Plural(_selected.Count, "job", "jobs") selected</span>
+                @if (Can(Permissions.JobsWrite))
+                {
+                    <Btn Size="sm" Icon="pause" Busy="_bulk" OnClick="() => BulkAsync(JobStatusDto.Inactive)">Pause</Btn>
+                    <Btn Size="sm" Icon="play" Busy="_bulk" OnClick="() => BulkAsync(JobStatusDto.Active)">Resume</Btn>
+                }
+                <Btn Size="sm" Variant="ghost" OnClick="() => _selected.Clear()">Clear</Btn>
+            </div>
+        }
+        <div class="ui-list__head cols-job" role="row">
+            <span class="ui-cell-check"><input type="checkbox" aria-label="Select all shown" checked="@(rows.Count > 0 && rows.All(r => _selected.Contains(r.Id)))" @onchange="e => SelectAll(rows, e.Value is true)" /></span>
+            <span></span>
+            <span><button type="button" @onclick='() => SortBy("name")'>Job @SortMark("name")</button></span>
+            <span><button type="button" @onclick='() => SortBy("server")'><span class="lbl-long">Protected system</span><span class="lbl-short">System</span> @SortMark("server")</button></span>
+            <span class="hide-md">Type</span>
+            <span><button type="button" @onclick='() => SortBy("last")'>Last run @SortMark("last")</button></span>
+            <span class="hide-md"><button type="button" @onclick='() => SortBy("next")'>Next run @SortMark("next")</button></span>
+            <span><button type="button" @onclick='() => SortBy("state")'>Protection @SortMark("state")</button></span>
+            <span></span>
+        </div>
+        <div class="ui-list" role="list">
+            @if (rows.Count == 0) { <Empty Compact="true" Art="search" Title="No jobs match" Message="Try another view or search." /> }
+            @foreach (var j in rows)
+            {
+                var sel = _selected.Contains(j.Id);
+                <div class="ui-list__row cols-job @(sel ? "is-selected" : null)" role="listitem" @oncontextmenu="e => OpenMenu(e, j)" @oncontextmenu:preventDefault="true">
+                    <a class="row-link" href="/jobs/@j.Id" aria-label="@j.Name"></a>
+                    <span class="ui-cell-check"><input type="checkbox" aria-label="@($"Select {j.Name}")" checked="@sel" @onchange="e => Toggle(j.Id, e.Value is true)" /></span>
+                    <span class="ui-glyph @Ui.EngineGlyph(j.Category)"><Icon Name="@Ui.Engine(j.Category)" Size="15" /></span>
+                    <span style="min-width:0"><span class="ui-list__title" style="display:block">@j.Name</span><span class="ui-list__sub" style="display:block">@Policy(j)</span></span>
+                    <span class="ui-list__meta hide-sm"><span class="row" style="gap:7px"><Icon Name="server" Size="13" Class="muted" /><span class="truncate">@j.ServerName</span></span></span>
+                    <span class="ui-list__meta hide-sm hide-md">@Ui.EngineLabel(j.Category)</span>
+                    <span class="hide-sm">@if (j.LastRun is { } lr) { <span class="row" style="gap:7px"><StatusBadge View="StatusMap.Run(lr.Status)" IconOnly="true" /><span class="ui-list__meta"><Ago Value="@(lr.CompletedAt ?? lr.StartedAt ?? lr.CreatedAt)" /></span></span> } else { <span class="ui-list__meta muted">Never run</span> }</span>
+                    <span class="ui-list__meta hide-sm hide-md">@NextText(j)</span>
+                    <StatusBadge View="State(j)" />
+                    <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                </div>
+            }
+        </div>
+        <Pager Total="rows.Count" One="job" Many="jobs" />
+    }
+</div>
+
+@if (_menu is { } m)
+{
+    <div style="position:fixed;inset:0;z-index:240" @onclick="CloseMenu" @oncontextmenu="CloseMenu" @oncontextmenu:preventDefault="true"></div>
+    <div class="ui-menu ui-menu--fixed" role="menu" style="@($"left:{m.X.ToString(CultureInfo.InvariantCulture)}px;top:{m.Y.ToString(CultureInfo.InvariantCulture)}px;z-index:250")" @onkeydown="MenuKey">
+        <div class="ui-menu__head truncate" style="text-transform:none;letter-spacing:0">@m.Job.Name</div>
+        <a class="ui-menu__item" href="/jobs/@m.Job.Id" @onclick="CloseMenu"><Icon Name="arrow-right" Size="15" />Open</a>
+        @if (Can(Permissions.JobsWrite))
+        {
+            <a class="ui-menu__item" href="/jobs/@m.Job.Id/edit" @onclick="CloseMenu"><Icon Name="edit" Size="15" />Edit</a>
+            <button type="button" class="ui-menu__item" @onclick="() => ToggleAsync(m.Job)"><Icon Name="@(m.Job.Status == JobStatusDto.Active ? "pause" : "play")" Size="15" />@(m.Job.Status == JobStatusDto.Active ? "Pause" : "Resume")</button>
+        }
+        @if (Can(Permissions.JobsRun)) { <div class="ui-menu__sep"></div><button type="button" class="ui-menu__item" @onclick="() => AskRun(m.Job)"><Icon Name="play" Size="15" />Run now…</button> }
+    </div>
+}
+<Confirm Open="_runTarget is not null" OpenChanged="o => { if (!o) _runTarget = null; }" Title="Run this backup now?" Icon="play" ConfirmText="Run backup" OnConfirm="RunAsync"
+         Message="@(_runTarget is null ? null : $"Backora connects to {_runTarget.ServerName} and runs {_runTarget.Name} right away.")" />
+
+@code {
+    private List<BackupJobDto>? _all;
+    private readonly HashSet<long> _selected = [];
+    private string? _error, _q;
+    private string _filter = "all", _sort = "name";
+    private bool _desc, _bulk;
+    private BackupJobDto? _runTarget;
+    private sealed record Menu(BackupJobDto Job, double X, double Y);
+    private Menu? _menu;
+
+    private static readonly (string Key, string Label)[] Filters = [("all", "All jobs"), ("attention", "Needs attention"), ("active", "Active"), ("paused", "Paused")];
+
+    internal static StatusView State(BackupJobDto j) =>
+        j.Status == JobStatusDto.Inactive ? new("Paused", StatusTone.Neutral, "pause", "No new backups are taken until it's resumed.")
+        : j.Health switch
+        {
+            HealthState.Critical => new("Failing", StatusTone.Danger, null, j.HealthReason),
+            HealthState.Warning => new("At risk", StatusTone.Warning, null, j.HealthReason),
+            HealthState.Healthy => new("Protected", StatusTone.Success),
+            _ => j.LastRun is null ? new("Not run yet", StatusTone.Neutral) : new("Unknown", StatusTone.Unknown),
+        };
+
+    /// <summary>One-line protection policy: frequency · retention · copies.</summary>
+    internal static string Policy(BackupJobDto j)
+    {
+        var sites = j.S3DestinationId is null ? 0 : 1 + (j.ReplicationTargets?.Count ?? 0);
+        var copies = sites == 0 ? "staging only" : sites == 1 ? "1 site" : $"{sites} sites";
+        return $"{(j.CronExpression is null ? "Manual" : j.ScheduleDescription)} · keeps {Ui.Keep(j.RetentionDays)} · {copies}";
+    }
+
+    private bool Matches(BackupJobDto j, string key) => key switch
+    {
+        "attention" => j.Status == JobStatusDto.Active && j.Health is HealthState.Critical or HealthState.Warning,
+        "active" => j.Status == JobStatusDto.Active,
+        "paused" => j.Status == JobStatusDto.Inactive,
+        _ => true,
+    };
+    private int Count(string key) => _all?.Count(j => Matches(j, key)) ?? 0;
+
+    private IEnumerable<BackupJobDto> Rows
+    {
+        get
+        {
+            var q = _all!.Where(j => Matches(j, _filter));
+            if (!string.IsNullOrWhiteSpace(_q)) q = q.Where(j => j.Name.Contains(_q, StringComparison.OrdinalIgnoreCase) || j.ServerName.Contains(_q, StringComparison.OrdinalIgnoreCase) || j.TemplateName.Contains(_q, StringComparison.OrdinalIgnoreCase));
+            IOrderedEnumerable<BackupJobDto> o = _sort switch
+            {
+                "server" => q.OrderBy(j => j.ServerName, StringComparer.OrdinalIgnoreCase),
+                "last" => q.OrderBy(j => j.LastRun?.CreatedAt ?? DateTimeOffset.MinValue),
+                "next" => q.OrderBy(j => j.Status == JobStatusDto.Active ? j.NextRunAt ?? DateTimeOffset.MaxValue : DateTimeOffset.MaxValue),
+                "state" => q.OrderBy(j => StateRank(j)),
+                _ => q.OrderBy(j => j.Name, StringComparer.OrdinalIgnoreCase),
+            };
+            return _desc ? o.Reverse() : o;
+        }
+    }
+    private static int StateRank(BackupJobDto j) => j.Status == JobStatusDto.Inactive ? 3 : j.Health switch { HealthState.Critical => 0, HealthState.Warning => 1, _ => 2 };
+
+    private void SortBy(string key) { if (_sort == key) _desc = !_desc; else { _sort = key; _desc = false; } }
+    private RenderFragment SortMark(string key) => __builder =>
+    {
+        if (_sort == key) { <Icon Name="@(_desc ? "arrow-down" : "arrow-up")" Size="11" Class="sort-ind" /> }
+    };
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var r = await Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name");
+        _error = ErrorOf(r); _all = r.Value?.Items.ToList();
+        _selected.IntersectWith(_all?.Select(j => j.Id) ?? []);
+    }
+
+    private void SetFilter(string key) { _filter = key; _selected.Clear(); }
+    private void Toggle(long id, bool on) { if (on) _selected.Add(id); else _selected.Remove(id); }
+    private void SelectAll(List<BackupJobDto> rows, bool on) { if (on) _selected.UnionWith(rows.Select(r => r.Id)); else _selected.Clear(); }
+
+    private async Task BulkAsync(JobStatusDto status)
+    {
+        _bulk = true;
+        var targets = _all!.Where(j => _selected.Contains(j.Id) && j.Status != status).ToList();
+        var failed = 0;
+        foreach (var j in targets) if (!(await Api.Jobs.SetStatusAsync(j.Id, status)).Ok) failed++;
+        _bulk = false;
+        if (failed == 0) Toasts.Success(status == JobStatusDto.Active ? "Jobs resumed" : "Jobs paused", Ui.Plural(targets.Count, "job", "jobs"));
+        else Toasts.Error("Some jobs weren't changed", $"{failed} of {targets.Count} failed. Check your permissions and try again.");
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private void OpenMenu(MouseEventArgs e, BackupJobDto j) => _menu = new(j, Math.Max(8, e.ClientX), Math.Max(8, e.ClientY));
+    private void CloseMenu() => _menu = null;
+    private void MenuKey(KeyboardEventArgs e) { if (e.Key == "Escape") _menu = null; }
+    private void AskRun(BackupJobDto j) { _menu = null; _runTarget = j; }
+
+    private async Task ToggleAsync(BackupJobDto j)
+    {
+        _menu = null;
+        var next = j.Status == JobStatusDto.Active ? JobStatusDto.Inactive : JobStatusDto.Active;
+        if (Handle(await Api.Jobs.SetStatusAsync(j.Id, next), next == JobStatusDto.Active ? "Job resumed" : "Job paused", j.Name)) await LoadAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        var j = _runTarget; _runTarget = null;
+        if (j is null) return;
+        var r = await Api.Jobs.RunNowAsync(j.Id, NewIdempotencyKey());
+        if (Handle(r, "Backup started", j.Name) && r.Value is not null) Nav.NavigateTo($"/runs/{r.Value.RunId}");
+    }
+
+    private static string NextText(BackupJobDto j) =>
+        j.Status == JobStatusDto.Inactive ? "Paused" : j.CronExpression is null ? "Manual" : j.NextRunAt is null ? "—" : Fmt.Relative(j.NextRunAt);
+}

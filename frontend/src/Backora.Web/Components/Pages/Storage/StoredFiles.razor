@@ -1,0 +1,276 @@
+@page "/files"
+<PageTitle>Stored files · Backora</PageTitle>
+
+<PageHead Title="Stored files" BackHref="/storage" BackLabel="Storage &amp; DR" Subtitle="The real contents of each storage site, read live from S3. Nothing here can be changed or deleted.">
+    <Below>
+        <div class="viewbar"><StorageTabs Active="files" /></div>
+    </Below>
+</PageHead>
+
+<div class="app-page sf">
+    @if (_sites is null) { <ListSkel /> }
+    else if (_sites.Count == 0) { <Empty Art="dr" Title="No storage sites yet" Message="Add a storage site to see what it holds."><Actions><Btn Variant="primary" Href="/storage/new" Icon="plus">Add storage</Btn></Actions></Empty> }
+    else
+    {
+        <section class="sf-bar" aria-label="Browse">
+            <div class="sf-bar__site">
+                <SearchSelect TItem="S3DestinationDto" Id="site" Items="_sites" Selected="_site" OnSelect="PickSiteAsync" Icon="s3"
+                              Text="d => d.Name" Sub="@(d => StorageList.IsFolder(d) ? $"Execution host · {d.LocalPath}" : $"{Host(d.Endpoint)} · {d.Bucket}")" Key="d => d.Id"
+                              Placeholder="Choose a storage site" SearchPlaceholder="Search sites…">
+                    <Trailing Context="d">
+                        @if (!d.IsEnabled) { <span class="ui-badge">Paused</span> }
+                        else if (d.EncryptionMode != EncryptionModeDto.None) { <span class="ui-badge ui-badge--accent"><Icon Name="lock" Size="11" />Encrypted</span> }
+                    </Trailing>
+                </SearchSelect>
+            </div>
+            <form class="sf-bar__search" @onsubmit="SearchAsync" @onsubmit:preventDefault="true" role="search">
+                <Icon Name="search" Size="15" />
+                <input type="search" placeholder="Search file names in this folder and below…" value="@_q" @oninput="e => _q = e.Value?.ToString() ?? string.Empty" aria-label="Search file names" />
+                @if (_q.Length > 0) { <button type="button" class="sf-x" aria-label="Clear search" @onclick="ClearSearchAsync"><Icon Name="x" Size="13" /></button> }
+                <kbd>↵</kbd>
+            </form>
+            <div class="sf-bar__dates" role="group" aria-label="Modified">
+                <div class="ui-segment">
+                    @foreach (var r in Ranges) { <button type="button" aria-pressed="@(_range == r.Key ? "true" : "false")" @onclick="() => SetRangeAsync(r.Key)">@r.Label</button> }
+                </div>
+                @if (_range == "custom")
+                {
+                    <span class="sf-dates">
+                        <input type="date" class="ui-input" aria-label="From" value="@_fromDate" @onchange="e => SetCustomAsync(e.Value?.ToString(), null)" />
+                        <span class="muted">–</span>
+                        <input type="date" class="ui-input" aria-label="To" value="@_toDate" @onchange="e => SetCustomAsync(null, e.Value?.ToString())" />
+                    </span>
+                }
+            </div>
+        </section>
+
+        @if (_site is not null)
+        {
+            <nav class="sf-crumbs" aria-label="Folder">
+                <button type="button" class="sf-crumb sf-crumb--root" @onclick="() => OpenAsync(string.Empty)"><Icon Name="@(StorageList.IsFolder(_site) ? "folder" : "s3")" Size="14" />@StorageList.Location(_site)</button>
+                @foreach (var (label, prefix) in Crumbs)
+                {
+                    <Icon Name="chevron-right" Size="12" Class="sf-sep" />
+                    <button type="button" class="sf-crumb" @onclick="() => OpenAsync(prefix)">@label</button>
+                }
+                <span class="sf-crumbs__end">
+                    <span class="ui-badge @(_site.EncryptionMode == EncryptionModeDto.None ? null : "ui-badge--ok")"><Icon Name="@(_site.EncryptionMode == EncryptionModeDto.None ? "unlock" : "lock")" Size="11" />@SiteState</span>
+                    @if (Searching) { <span class="ui-badge ui-badge--accent"><Icon Name="search" Size="11" />@SearchLabel</span> }
+                    <Btn Size="sm" Variant="ghost" Icon="refresh" OnClick="ReloadAsync" Busy="_loading">Refresh</Btn>
+                </span>
+            </nav>
+
+            @if (_error is not null)
+            {
+                <Empty Error="true" Title="We couldn't read this site" Message="@_error"><Actions><Btn OnClick="ReloadAsync" Icon="refresh">Try again</Btn>@if (Can(Permissions.StorageWrite)) { <Btn Href="@($"/storage/{_site.Id}")">Open site settings</Btn> }</Actions></Empty>
+            }
+            else if (_items is null) { <ListSkel /> }
+            else
+            {
+                <div class="sf-stats" aria-label="Totals">
+                    <div class="sf-stat sf-stat--hero">
+                        <span class="sf-stat__ico"><Icon Name="database" Size="18" /></span>
+                        <div><span>@(Searching ? "Size of matches" : "Total stored")</span><b>@Fmt.Bytes(TotalBytes)@Plus</b><small>@(Searching ? "Every match, all levels below this folder" : _prefix.Length == 0 ? "Whole bucket, all levels" : "This folder, all levels")</small></div>
+                    </div>
+                    <div class="sf-stat">
+                        <span class="sf-stat__ico"><Icon Name="file" Size="17" /></span>
+                        <div><span>@(Searching ? "Matching files" : "Files")</span><b>@TotalFiles.ToString("N0")@Plus</b><small>@(Searching ? $"{_scanned:N0} objects scanned" : $"Average {Fmt.Bytes(TotalFiles == 0 ? 0 : TotalBytes / TotalFiles)} per file")</small></div>
+                    </div>
+                    <div class="sf-stat">
+                        <span class="sf-stat__ico"><Icon Name="folder" Size="17" /></span>
+                        <div><span>Folders</span><b>@(Searching ? "—" : FolderCount.ToString("N0"))</b><small>@(Searching ? "Search lists files only" : FolderCount == 0 ? "No subfolders" : "One per backup job")</small></div>
+                    </div>
+                    <div class="sf-stat">
+                        <span class="sf-stat__ico"><Icon Name="history" Size="17" /></span>
+                        <div><span>Latest file</span><b>@(NewestAll is { } nw ? Fmt.Relative(nw) : "—")</b><small>@(NewestAll is { } nw2 ? Clock.Format(nw2, true) : "No files")@(OldestAll is { } od ? $" · oldest {Fmt.Relative(od)}" : "")</small></div>
+                    </div>
+                </div>
+                @if (_totals is { Complete: false }) { <div class="ui-callout ui-callout--warn sf-note"><Icon Name="alert" Size="15" /><div>This folder holds more than @_totals.Files.ToString("N0") files, so the totals stop there. Open a subfolder for exact numbers.</div></div> }
+
+                @if (_items.Count == 0)
+                {
+                    <Empty Art="search" Title="@(Searching ? "No files match" : "This folder is empty")" Message="@(Searching ? "Try another name or a wider date range." : "Backups copied to this site appear here, one folder per job.")" />
+                }
+                else
+                {
+                    <section class="ui-section sf-table" aria-label="Files">
+                        <div class="ui-list__head sf-cols" role="row">
+                            <span></span>
+                            <button type="button" class="sf-sort @(_sort == "name" ? "is-on" : null)" @onclick="@(() => _sort = "name")"><span>Name</span>@if (_sort == "name") { <Icon Name="chevron-down" Size="11" /> }</button>
+                            <button type="button" class="sf-sort sf-num @(_sort == "files" ? "is-on" : null)" @onclick="@(() => _sort = "files")"><span>Files</span>@if (_sort == "files") { <Icon Name="chevron-down" Size="11" /> }</button>
+                            <button type="button" class="sf-sort @(_sort == "size" ? "is-on" : null)" @onclick="@(() => _sort = "size")"><span>Size</span>@if (_sort == "size") { <Icon Name="chevron-down" Size="11" /> }</button>
+                            <button type="button" class="sf-sort @(_sort == "date" ? "is-on" : null)" @onclick="@(() => _sort = "date")"><span>Last modified</span>@if (_sort == "date") { <Icon Name="chevron-down" Size="11" /> }</button>
+                            <span></span>
+                        </div>
+                        <div class="ui-list" role="list">
+                            @foreach (var it in Sorted)
+                            {
+                                var share = TotalBytes > 0 ? Math.Clamp(it.Size * 100d / TotalBytes, it.Size > 0 ? 1.5 : 0, 100) : 0;
+                                if (it.IsFolder)
+                                {
+                                    <button type="button" class="ui-list__row sf-cols" role="listitem" @onclick="() => OpenAsync(it.Key)">
+                                        <span class="sf-ico sf-ico--folder"><Icon Name="folder" Size="15" /></span>
+                                        <span class="sf-name"><span class="ui-list__title">@it.Name</span><span class="ui-list__sub">@(it.Files == 0 ? "Empty folder" : $"Folder · {Ui.Plural((int)Math.Min(it.Files, int.MaxValue), "file", "files")}")</span></span>
+                                        <span class="sf-num num">@(it.Files == 0 ? "—" : it.Files.ToString("N0"))</span>
+                                        <span class="sf-size"><b class="num">@Fmt.Bytes(it.Size)</b><span class="sf-meter" title="@($"{share:0.#}% of the total")"><i style="width:@(share.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></i></span></span>
+                                        <span class="sf-when" title="@(it.LastModified is { } flm ? $"Newest file {Clock.Format(flm, true)}" : null)">@(it.LastModified is { } flm2 ? Fmt.Relative(flm2) : "—")<small>@(it.LastModified is { } flm3 ? Clock.Format(flm3) : "No files")</small></span>
+                                        <Icon Name="chevron-right" Size="14" Class="chev" />
+                                    </button>
+                                }
+                                else
+                                {
+                                    var kind = Kind(it.Name);
+                                    var sealedFile = it.Name.EndsWith(".age", StringComparison.OrdinalIgnoreCase);
+                                    <div class="ui-list__row sf-cols" role="listitem">
+                                        <span class="sf-ico sf-ico--@kind.Css" title="@kind.Label"><Icon Name="@kind.Icon" Size="15" /></span>
+                                        <span class="sf-name">
+                                            <span class="ui-list__title mono" title="@it.Key">@(sealedFile ? it.Name[..^4] : it.Name)@if (sealedFile) { <span class="sf-seal" title="@(_site.BackoraHoldsKey ? $"Encrypted with the Backora key {_site.EncryptionKeyFingerprint}; Backora decrypts it on restore" : "Encrypted with a customer-held key; the private key is needed to restore")"><Icon Name="lock" Size="10" />@(_site.BackoraHoldsKey ? "Backora key" : "age")</span> }</span>
+                                            <span class="ui-list__sub">@(sealedFile ? (_site.BackoraHoldsKey ? "Encrypted · decrypts with the Backora key" : "Encrypted · needs your private key") : kind.Label)@if (Searching) { <span class="mono"> · @Parent(it.Key)</span> }</span>
+                                        </span>
+                                        <span class="sf-num muted">1</span>
+                                        <span class="sf-size"><b class="num">@Fmt.Bytes(it.Size)</b><span class="sf-meter" title="@($"{share:0.#}% of the total")"><i style="width:@(share.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%"></i></span></span>
+                                        <span class="sf-when" title="@(it.LastModified is { } lm ? Clock.Format(lm, true) : null)">@(it.LastModified is { } lm2 ? Fmt.Relative(lm2) : "—")<small>@(it.LastModified is { } lm3 ? Clock.Format(lm3) : null)</small></span>
+                                        <button type="button" class="sf-copy" title="Copy object key" aria-label="Copy object key for @it.Name" @onclick="() => CopyAsync(it.Key)"><Icon Name="copy" Size="13" /></button>
+                                    </div>
+                                }
+                            }
+                        </div>
+                        @if (_next is not null || _truncated)
+                        {
+                            <div class="ui-section__foot sf-foot">
+                                @if (_next is not null) { <Btn Size="sm" Icon="chevron-down" Busy="_loading" OnClick="MoreAsync">Load more</Btn> }
+                                else { <span>Showing the newest @_items.Count matches. Narrow the search or the dates to see older files.</span> }
+                            </div>
+                        }
+                    </section>
+                }
+            }
+        }
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "site")] public long? SiteParam { get; set; }
+    [Inject] private BackoraJs Js { get; set; } = default!;
+
+    private List<S3DestinationDto>? _sites;
+    private S3DestinationDto? _site;
+    private string _prefix = string.Empty, _q = string.Empty, _activeQ = string.Empty, _range = "any";
+    private string? _fromDate, _toDate, _next, _error;
+    private List<S3BrowseItemDto>? _items;
+    private bool _truncated, _loading;
+    private int _scanned;
+
+    private static readonly (string Key, string Label)[] Ranges = [("any", "Any time"), ("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days"), ("custom", "Custom")];
+
+    private bool Searching => _activeQ.Length > 0 || _range != "any";
+    private S3BrowseTotals? _totals;
+    private string _sort = "name";
+
+    // Totals come from the API (everything below the folder, all levels); older APIs fall back to the listed items.
+    private long TotalBytes => _totals?.Bytes ?? _items?.Sum(i => i.Size) ?? 0;
+    private long TotalFiles => _totals?.Files ?? _items?.Sum(i => i.IsFolder ? i.Files : 1) ?? 0;
+    private int FolderCount => _totals?.Folders ?? _items?.Count(i => i.IsFolder) ?? 0;
+    private DateTimeOffset? NewestAll => _totals?.Newest ?? _items?.Where(i => i.LastModified is not null).Max(i => i.LastModified);
+    private DateTimeOffset? OldestAll => _totals?.Oldest;
+    private string SiteState => _site is null ? string.Empty : !_site.IsEnabled ? "Paused"
+        : _site.EncryptionMode == EncryptionModeDto.None ? "Not client-side encrypted"
+        : _site.BackoraHoldsKey ? $"Encrypted · Backora key {_site.EncryptionKeyFingerprint}" : "Encrypted · your key";
+    private string Plus => _totals is { Complete: false } ? "+" : string.Empty;
+
+    private IEnumerable<S3BrowseItemDto> Sorted => (_items ?? []) switch
+    {
+        var x when _sort == "size" => x.OrderByDescending(i => i.Size),
+        var x when _sort == "files" => x.OrderByDescending(i => i.IsFolder ? i.Files : 1).ThenByDescending(i => i.Size),
+        var x when _sort == "date" => x.OrderByDescending(i => i.LastModified ?? DateTimeOffset.MinValue),
+        var x => x.OrderBy(i => !i.IsFolder).ThenBy(i => i.Name, StringComparer.OrdinalIgnoreCase),
+    };
+    private string SearchLabel => string.Join(" · ", new[] { _activeQ.Length > 0 ? $"“{_activeQ}”" : null, _range switch { "24h" => "last 24 hours", "7d" => "last 7 days", "30d" => "last 30 days", "custom" => "custom dates", _ => null } }.Where(x => x is not null));
+
+    private IEnumerable<(string Label, string Prefix)> Crumbs
+    {
+        get
+        {
+            var parts = _prefix.TrimEnd('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length; i++) yield return (parts[i], string.Join('/', parts.Take(i + 1)) + "/");
+        }
+    }
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        var r = await Api.Storage.ListAsync();
+        _error = ErrorOf(r);
+        _sites = r.Value?.OrderBy(d => !d.IsEnabled).ThenBy(d => d.Name).ToList() ?? [];
+        _site = _sites.FirstOrDefault(d => d.Id == SiteParam) ?? _sites.FirstOrDefault(d => d.IsEnabled) ?? _sites.FirstOrDefault();
+        if (_site is not null) { _prefix = Home(_site); await ReloadAsync(); }
+    }
+
+    private async Task PickSiteAsync(S3DestinationDto d) { _site = d; _prefix = Home(d); Nav.NavigateTo($"/files?site={d.Id}", replace: true); await ReloadAsync(); }
+    private Task OpenAsync(string prefix) { _prefix = prefix; _q = _activeQ = string.Empty; _range = "any"; return ReloadAsync(); }
+    private Task SearchAsync() { _activeQ = _q.Trim(); return ReloadAsync(); }
+    private Task ClearSearchAsync() { _q = _activeQ = string.Empty; return ReloadAsync(); }
+    private Task SetRangeAsync(string key) { _range = key; return key == "custom" && _fromDate is null && _toDate is null ? Task.CompletedTask : ReloadAsync(); }
+    private Task SetCustomAsync(string? from, string? to) { if (from is not null) _fromDate = from; if (to is not null) _toDate = to; return ReloadAsync(); }
+
+    private (DateTimeOffset? From, DateTimeOffset? To) Window()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return _range switch
+        {
+            "24h" => (now.AddHours(-24), null),
+            "7d" => (now.AddDays(-7), null),
+            "30d" => (now.AddDays(-30), null),
+            "custom" => (ParseDay(_fromDate), ParseDay(_toDate)?.AddDays(1)),
+            _ => (null, null),
+        };
+    }
+
+    private DateTimeOffset? ParseDay(string? d) =>
+        DateOnly.TryParse(d, System.Globalization.CultureInfo.InvariantCulture, out var day)
+            ? new DateTimeOffset(day.ToDateTime(TimeOnly.MinValue), Clock.Zone.GetUtcOffset(day.ToDateTime(TimeOnly.MinValue)))
+            : null;
+
+    private async Task ReloadAsync()
+    {
+        if (_site is null) return;
+        _items = null; _next = null; _error = null; _truncated = false; _totals = null;
+        await FetchAsync(null);
+    }
+
+    private Task MoreAsync() => FetchAsync(_next);
+
+    private async Task FetchAsync(string? token)
+    {
+        if (_site is null) return;
+        _loading = true;
+        var (from, to) = Window();
+        var r = await Api.Storage.BrowseAsync(_site.Id, _prefix, _activeQ, from, to, token, PageToken);
+        _loading = false;
+        if (!r.Ok || r.Value is null) { _error = ErrorOf(r) ?? "The site didn't answer."; return; }
+        _items = token is null ? r.Value.Items.ToList() : [.. _items ?? [], .. r.Value.Items];
+        if (token is null || r.Value.Totals is not null) _totals = r.Value.Totals ?? _totals;
+        _next = r.Value.NextToken; _truncated = r.Value.Truncated && r.Value.Searched; _scanned = (token is null ? 0 : _scanned) + r.Value.Scanned;
+    }
+
+    private async Task CopyAsync(string key)
+    {
+        if (await Js.InvokeAsync<bool>("copyText", key)) Toasts.Success("Object key copied");
+    }
+
+    /// <summary>A site with a path prefix opens in that folder: that's where Backora keeps its copies.</summary>
+    private static string Home(S3DestinationDto d) => string.IsNullOrWhiteSpace(d.PathPrefix) ? string.Empty : d.PathPrefix.Trim('/') + "/";
+
+    private static string Parent(string key) { var i = key.TrimEnd('/').LastIndexOf('/'); return i < 0 ? "/" : key[..(i + 1)]; }
+    private static string Host(string endpoint) => Uri.TryCreate(endpoint, UriKind.Absolute, out var u) ? u.Host : endpoint;
+
+    private static (string Icon, string Label, string Css) Kind(string name)
+    {
+        var n = name.ToLowerInvariant();
+        if (n.EndsWith(".age") || n.EndsWith(".gpg") || n.EndsWith(".enc")) return ("lock", "Encrypted archive", "lock");
+        if (n.EndsWith(".sha256") || n.EndsWith(".md5") || n.EndsWith("manifest.json")) return ("verified", "Checksum / manifest", "check");
+        if (n.EndsWith(".sql") || n.EndsWith(".sql.gz") || n.EndsWith(".dump")) return ("database", "Database dump", "db");
+        if (n.EndsWith(".tar") || n.EndsWith(".tar.gz") || n.EndsWith(".tgz") || n.EndsWith(".tar.zst") || n.EndsWith(".zst") || n.EndsWith(".gz") || n.EndsWith(".zip") || n.EndsWith(".xbstream")) return ("encrypted-archive", "Archive", "arch");
+        if (n.EndsWith(".log") || n.EndsWith(".txt")) return ("file", "Log / text", "file");
+        return ("file", "File", "file");
+    }
+}

@@ -1,0 +1,96 @@
+@page "/storage"
+<PageTitle>Storage &amp; DR · Backora</PageTitle>
+
+<PageHead Title="Storage &amp; DR" Subtitle="Where verified copies are kept, and how they're replicated to disaster-recovery sites.">
+    <Actions>@if (Can(Permissions.StorageWrite)) { <Btn Href="/storage/new?purpose=dr" Icon="topology">Add DR site</Btn><Btn Variant="primary" Href="/storage/new" Icon="plus">Add storage</Btn> }</Actions>
+    <Below><div class="viewbar"><StorageTabs Active="sites" /></div></Below>
+</PageHead>
+
+<div class="app-page stack-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load storage" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_dests is null) { <ListSkel Rows="3" /> }
+    else if (_dests.Count == 0)
+    {
+        <Empty Art="storage" Title="Add your first storage site" Message="Any S3-compatible service works. Add a second site in another location to protect against losing the first.">
+            <Actions>@if (Can(Permissions.StorageWrite)) { <Btn Href="/storage/new?purpose=dr" Icon="topology">Add DR site</Btn><Btn Variant="primary" Href="/storage/new" Icon="plus">Add storage</Btn> }</Actions>
+        </Empty>
+    }
+    else
+    {
+        <Panel Title="Protection map" Icon="topology">
+            <Actions><span class="xs muted">Line colour shows the latest copy on each route</span></Actions>
+            <ChildContent><DrTopology Jobs="_jobs" Sites="_dests" Copies="_copies" /></ChildContent>
+        </Panel>
+        <div>
+            <div class="ui-list__head cols-dest" style="border:1px solid var(--line);border-bottom-color:var(--line);border-radius:var(--r-xl) var(--r-xl) 0 0"><span></span><span>Site</span><span>Provider</span><span>Role</span><span>Stored</span><span>Availability</span><span></span></div>
+            <div class="ui-list" role="list" style="background:var(--surface);border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-xl) var(--r-xl);overflow:hidden">
+                @foreach (var d in _dests)
+                {
+                    <a class="ui-list__row cols-dest" href="/storage/@d.Id" role="listitem">
+                        <span class="ui-glyph @(RoleOf(d) == "DR site" ? "ui-glyph--flow" : "ui-glyph--accent")"><Icon Name="@(RoleOf(d) == "DR site" ? "topology" : "s3")" Size="15" /></span>
+                        <span style="min-width:0"><span class="ui-list__title" style="display:block">@d.Name</span><span class="ui-list__sub" style="display:block">@Location(d)@(Ui.Encrypted(d) ? " · encrypted with your key" : " · not encrypted")</span></span>
+                        <span class="ui-list__meta hide-sm">@ProviderOf(d)@if (!IsFolder(d)) { <span class="muted"> · @d.Region</span> }</span>
+                        <span class="ui-list__meta hide-sm">@RoleText(d)</span>
+                        <span class="ui-list__meta hide-sm">@Fmt.Bytes(d.StoredBytes)<span class="muted"> · @Fmt.Number(d.RecoveryPointCount) points</span></span>
+                        <StatusBadge View="State(d)" />
+                        <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                    </a>
+                }
+            </div>
+        </div>
+        <p class="xs muted">Capacity isn't shown because S3 providers don't report it. Stored size counts Backora copies only.</p>
+    }
+</div>
+
+@code {
+    private List<S3DestinationDto>? _dests;
+    private List<BackupJobDto> _jobs = [];
+    private List<OffloadSummaryDto> _copies = [];
+
+    private int PrimaryFor(S3DestinationDto d) => _jobs.Count(j => j.S3DestinationId == d.Id);
+    private int DrFor(S3DestinationDto d) => _jobs.Count(j => j.ReplicationTargets?.Any(t => t.DestinationId == d.Id) == true);
+    private string RoleOf(S3DestinationDto d) => PrimaryFor(d) == 0 && DrFor(d) > 0 ? "DR site" : "Primary";
+    private string RoleText(S3DestinationDto d) => (PrimaryFor(d), DrFor(d)) switch
+    {
+        (0, 0) => "Not assigned",
+        (var p, 0) => $"Primary for {Ui.Plural(p, "job", "jobs")}",
+        (0, var r) => $"DR site for {Ui.Plural(r, "job", "jobs")}",
+        (var p, var r) => $"Primary ×{p} · DR ×{r}",
+    };
+
+    /// <summary>A folder on the execution host (a mounted NFS share) rather than an S3 bucket.</summary>
+    internal static bool IsFolder(S3DestinationDto d) => d.Kind == StorageKindDto.Filesystem;
+    /// <summary>Where copies go: the bucket, or the folder on the execution host.</summary>
+    internal static string Location(S3DestinationDto d) => IsFolder(d) ? d.LocalPath ?? string.Empty : d.Bucket;
+    internal static string ProviderOf(S3DestinationDto d) => IsFolder(d) ? "NFS / folder" : Provider(d.Endpoint);
+
+    internal static string Provider(string endpoint)
+    {
+        var h = Host(endpoint).ToLowerInvariant();
+        return h.Contains("amazonaws", StringComparison.Ordinal) ? "Amazon S3" : h.Contains("wasabi", StringComparison.Ordinal) ? "Wasabi"
+            : h.Contains("backblaze", StringComparison.Ordinal) ? "Backblaze B2" : h.Contains("digitalocean", StringComparison.Ordinal) ? "DigitalOcean Spaces"
+            : h.Contains("cloudflarestorage", StringComparison.Ordinal) ? "Cloudflare R2" : h.Contains("minio", StringComparison.Ordinal) ? "MinIO" : "S3-compatible";
+    }
+    private string? _error;
+
+    internal static StatusView State(S3DestinationDto s) =>
+        !s.IsEnabled ? new("Paused", StatusTone.Neutral, "pause")
+        : s.LastConnectionTestSucceeded == false ? new("Can't connect", StatusTone.Danger, null, s.LastConnectionTestMessage)
+        : s.LastConnectionTestSucceeded == true ? new("Available", StatusTone.Success)
+        : s.RecoveryPointCount > 0 ? new("In use", StatusTone.Success, null, "Copies are stored here. Run a connection test to confirm access.")
+        : new("Not tested", StatusTone.Neutral);
+
+    internal static string Host(string endpoint) => Uri.TryCreate(endpoint, UriKind.Absolute, out var u) && u.Authority.Length > 0 ? u.Authority : endpoint;
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var jobs = Can(Permissions.JobsRead) ? Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name") : null;
+        var copies = Can(Permissions.RecoveryPointsRead) ? Api.RecoveryPoints.ListAsync(new RecoveryPointFilter(), 1, 200, "-createdAt") : null;
+        var r = await Api.Storage.ListAsync(); _error = ErrorOf(r);
+        if (jobs is not null) _jobs = (await jobs).Value?.Items.ToList() ?? [];
+        if (copies is not null) _copies = (await copies).Value?.Items.ToList() ?? [];
+        _dests = r.Value;
+    }
+}

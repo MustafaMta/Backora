@@ -1,0 +1,11 @@
+@page "/error"
+@using System.Diagnostics
+<PageTitle>Something went wrong · Backora</PageTitle>
+<Empty Art="generic" Title="Something went wrong" Message="Nothing was changed by this page. Try again, or share the reference below with your administrator." Error="true">
+    <Actions><Btn Variant="primary" Href="/">Back to Backora</Btn></Actions>
+</Empty>
+@if (RequestId is not null) { <p class="xs muted mono" style="text-align:center">Reference @RequestId</p> }
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+    private string? RequestId => Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

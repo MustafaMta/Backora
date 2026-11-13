@@ -1,0 +1,37 @@
+@* Confirmation dialog. RequireText enables typed confirmation for destructive or irreversible actions (case-sensitive). *@
+<Dialog Open="Open" OpenChanged="OpenChanged" Title="@Title" Icon="@(Danger ? "alert" : Icon)" IconTone="@(Danger ? "bad" : "accent")" Alert="true" Locked="Busy"
+        InitialFocus="@(RequireText is null ? ".js-cancel" : ".js-confirm-input")" OnClose="() => OnCancel.InvokeAsync()">
+    <ChildContent>
+        <div class="stack-sm">
+            @if (Message is not null) { <p>@Message</p> }
+            @Body
+            @if (RequireText is not null)
+            {
+                <FormField Label="@($"Type {RequireText} to confirm")" For="@_id"><input id="@_id" class="ui-input mono js-confirm-input" autocomplete="off" spellcheck="false" @bind="_typed" @bind:event="oninput" /></FormField>
+            }
+        </div>
+    </ChildContent>
+    <Footer>
+        <Btn Class="js-cancel" Disabled="Busy" OnClick="Cancel">@CancelText</Btn>
+        <Btn Variant="@(Danger ? "danger" : "primary")" Busy="Busy" Disabled="@(!Ready)" OnClick="() => OnConfirm.InvokeAsync()" Class="js-confirm">@ConfirmText</Btn>
+    </Footer>
+</Dialog>
+@code {
+    private readonly string _id = "c" + Guid.NewGuid().ToString("N")[..8];
+    private string _typed = "";
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public RenderFragment? Body { get; set; }
+    [Parameter] public string ConfirmText { get; set; } = "Confirm";
+    [Parameter] public string CancelText { get; set; } = "Cancel";
+    [Parameter] public bool Danger { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string? RequireText { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    private bool Ready => RequireText is null || string.Equals(_typed, RequireText, StringComparison.Ordinal);
+    private async Task Cancel() { _typed = ""; Open = false; await OpenChanged.InvokeAsync(false); await OnCancel.InvokeAsync(); }
+}

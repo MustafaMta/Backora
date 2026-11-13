@@ -1,0 +1,29 @@
+@implements IAsyncDisposable
+@inject BackoraJs Js
+@* Menu button: Trigger renders the button content; ChildContent renders ui-menu__item entries. *@
+<div class="ui-anchor @Class" @ref="_anchor">
+    <button type="button" class="@ButtonClass" aria-haspopup="menu" aria-expanded="@(_open ? "true" : "false")" aria-label="@AriaLabel" title="@AriaLabel" @onclick="() => _open = !_open">@Trigger</button>
+    @if (_open) { <div class="ui-menu @(Left ? "ui-menu--left" : null)" role="menu" @onclick="() => _open = false" @onkeydown="Key">@ChildContent</div> }
+</div>
+@code {
+    private ElementReference _anchor; private bool _open; private IJSObjectReference? _outside; private DotNetObjectReference<Dropdown>? _ref;
+    [Parameter] public RenderFragment? Trigger { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string ButtonClass { get; set; } = "ui-btn ui-btn--icon";
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public bool Left { get; set; }
+    [Parameter] public string? Class { get; set; }
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first) return;
+        _ref = DotNetObjectReference.Create(this);
+        _outside = await Js.InvokeAsync<IJSObjectReference>("clickOutside", _anchor, _ref, nameof(CloseFromJs));
+    }
+    [JSInvokable] public Task CloseFromJs() { if (!_open) return Task.CompletedTask; _open = false; return InvokeAsync(StateHasChanged); }
+    private void Key(KeyboardEventArgs e) { if (e.Key == "Escape") _open = false; }
+    public async ValueTask DisposeAsync()
+    {
+        if (_outside is not null) { try { await _outside.InvokeVoidAsync("dispose"); await _outside.DisposeAsync(); } catch (JSDisconnectedException) { } }
+        _ref?.Dispose();
+    }
+}

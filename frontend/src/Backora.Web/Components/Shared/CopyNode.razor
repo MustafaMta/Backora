@@ -1,0 +1,34 @@
+@* One storage site holding copies of a job: role, latest copy result, encryption, independent retry. *@
+<div class="topo__node @(Site is { IsEnabled: false } ? "topo__node--off" : "")" style="grid-template-columns:30px minmax(0,1fr) auto">
+    <span class="ui-glyph @(Role.StartsWith("Primary", StringComparison.Ordinal) ? "ui-glyph--accent" : "ui-glyph--flow")"><Icon Name="@(Site?.Kind == StorageKindDto.Filesystem ? "folder" : Role.StartsWith("Primary", StringComparison.Ordinal) ? "s3" : "topology")" Size="15" /></span>
+    <span style="min-width:0">
+        <b><a href="/storage/@SiteId">@Name</a></b>
+        <small>@Role@if (Site is { } s && Ui.Encrypted(s)) { <span>·</span><Icon Name="lock" Size="11" /><span>encrypted</span> }@if (Site is { IsEnabled: false }) { <span>· paused</span> }</small>
+        @if (Latest is { Status: OffloadStatusDto.Failed } f) { <small class="t-bad" style="white-space:normal">@StatusMap.Failure(f.FailureClass)</small> }
+        else if (Latest is { } l) { <small>@StatusMap.Offload(l).Label · @Fmt.Relative(l.CompletedAt ?? l.CreatedAt)</small> }
+        else { <small>No copy yet</small> }
+    </span>
+    <span class="row" style="gap:6px">
+        @if (Latest is { Status: OffloadStatusDto.Failed, LegacyPrefix: false } fl && CanRetry) { <Btn Size="sm" Icon="retry" Busy="_busy" OnClick="() => RetryAsync(fl)">Retry</Btn> }
+        else if (Behind && CanRetry) { <Btn Size="sm" Icon="cloud-upload" Busy="_busy" OnClick="CopyNowAsync">Copy now</Btn> }
+        else if (Latest is { } x) { <StatusBadge View="StatusMap.Offload(x)" IconOnly="true" /> }
+    </span>
+</div>
+@code {
+    [Parameter] public long SiteId { get; set; }
+    [Parameter] public string Name { get; set; } = "";
+    [Parameter] public string Role { get; set; } = "";
+    [Parameter] public OffloadSummaryDto? Latest { get; set; }
+    [Parameter] public S3DestinationDto? Site { get; set; }
+    [Parameter] public bool CanRetry { get; set; }
+    [Parameter] public EventCallback<OffloadSummaryDto> OnRetry { get; set; }
+    /// <summary>For a DR site: the newest recovery point on primary storage, offered for copying here when this site doesn't have it.</summary>
+    [Parameter] public OffloadSummaryDto? CopyFrom { get; set; }
+    [Parameter] public EventCallback<OffloadSummaryDto> OnCopyNow { get; set; }
+    private bool _busy;
+    // Behind: the newest stored point isn't here yet (no copy of it, nothing on its way) and the site takes new copies.
+    private bool Behind => CopyFrom is { } p && OnCopyNow.HasDelegate && Site is not { IsEnabled: false }
+        && (Latest is null || (Latest.SourceOffloadId != p.Id && Latest.Status is OffloadStatusDto.Completed or OffloadStatusDto.Failed or OffloadStatusDto.Cancelled));
+    private async Task RetryAsync(OffloadSummaryDto o) { _busy = true; await OnRetry.InvokeAsync(o); _busy = false; }
+    private async Task CopyNowAsync() { _busy = true; await OnCopyNow.InvokeAsync(CopyFrom!); _busy = false; }
+}

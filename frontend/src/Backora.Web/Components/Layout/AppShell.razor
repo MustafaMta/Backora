@@ -1,0 +1,199 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject UserContext CurrentUser
+@inject BackoraJs Js
+@inject ClientClock Clock
+@inject NavigationManager NavManager
+@inject SearchClient SearchApi
+
+<a class="skip" href="#main">Skip to content</a>
+<div class="app-app @(_rail ? "is-rail" : null) @(_open ? "is-open" : null)">
+    <aside class="app-side" aria-label="Sidebar">
+        <div class="app-side__top">
+            <a class="app-brand" href="/" aria-label="Backora overview"><BrandMark Size="36" /><span class="app-brand__name"><b>Backora</b><small>Data protection</small></span></a>
+            <button type="button" class="app-side__icon app-side__close" @onclick="() => _open = false" aria-label="Close navigation"><Icon Name="x" Size="16" /></button>
+        </div>
+        <nav class="app-nav" aria-label="Main navigation">
+            @foreach (var group in Nav.Items.Where(Visible).GroupBy(i => i.Group))
+            {
+                var collapsed = _collapsed.Contains(group.Key);
+                <div class="app-nav__group @(collapsed ? "is-collapsed" : null)">
+                    <button type="button" class="app-nav__label" aria-expanded="@(collapsed ? "false" : "true")" @onclick="() => ToggleGroup(group.Key)">@group.Key<Icon Name="chevron-down" Size="12" /></button>
+                    @foreach (var item in group)
+                    {
+                        var active = Nav.Match(_path) == item;
+                        var onSub = active && Nav.MatchSub(_path) is not null;
+                        <a class="app-nav__item @(active && !onSub ? "is-active" : null)" href="@item.Href" aria-current="@(active && !onSub ? "page" : null)" title="@(_rail ? item.Label : null)" @onclick="() => _open = false"><Icon Name="@item.Icon" Size="17" /><span>@item.Label</span></a>
+                        @if (active && item.Subs is { Length: > 0 })
+                        {
+                            @foreach (var sub in item.Subs.Where(x => x.Permission is null || CurrentUser.Can(x.Permission)))
+                            {
+                                var subActive = Nav.MatchSub(_path) == sub;
+                                <a class="app-nav__item app-nav__sub @(subActive ? "is-active" : null)" href="@sub.Href" aria-current="@(subActive ? "page" : null)" @onclick="() => _open = false"><span>@sub.Label</span></a>
+                            }
+                        }
+                    }
+                </div>
+            }
+        </nav>
+        <div class="app-side__foot">
+            @if (ReadOnlyReview) { <div class="app-review" title="This instance refuses every change. Used for automated visual review."><Icon Name="eye" Size="13" /><span>Read-only review</span></div> }
+            <HealthStatus />
+            <button type="button" class="app-collapse app-side__rail" @onclick="ToggleRail" aria-label="@(_rail ? "Expand sidebar" : "Collapse sidebar")"><Icon Name="chevrons-left" Size="15" /><span>Collapse</span></button>
+        </div>
+    </aside>
+    <div class="app-backdrop" @onclick="() => _open = false"></div>
+
+    <div class="app-work">
+        <header class="app-top">
+            <button type="button" class="app-top__btn app-menu" aria-label="Open navigation" @onclick="() => _open = true"><Icon Name="menu" Size="18" /></button>
+            <button type="button" class="app-top__search" @onclick="() => _palette = true" aria-haspopup="dialog" aria-label="Search (Ctrl+K)"><Icon Name="search" Size="15" /><span>Search backups, servers, recovery points…</span><kbd>⌘K</kbd></button>
+            <span class="app-top__spacer"></span>
+            <AlertsMenu />
+            <button type="button" class="app-top__btn app-top__theme" aria-label="@(_dark ? "Switch to light theme" : "Switch to dark theme")" title="Theme" @onclick="QuickTheme"><Icon Name="@(_dark ? "sun" : "moon")" Size="18" /></button>
+            <button type="button" class="app-top__btn app-top__theme" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" @onclick="() => _help = true"><Icon Name="keyboard" Size="18" /></button>
+            <span class="app-top__sep"></span>
+            @if (CurrentUser.User is { } me)
+            {
+                <Dropdown ButtonClass="app-me" AriaLabel="Account menu">
+                    <Trigger>
+                        <span class="ui-avatar" aria-hidden="true">@Fmt.Initials(me.Name)</span>
+                        <span class="app-me__text"><b>@me.Name</b><small>@RoleLabel(me)</small></span>
+                        <Icon Name="chevron-down" Size="14" />
+                    </Trigger>
+                    <ChildContent>
+                        <div class="ui-menu__head truncate" style="text-transform:none;letter-spacing:0;font-weight:500">@me.Email</div>
+                        <a class="ui-menu__item" href="/account"><Icon Name="user" Size="15" />Your account</a>
+                        <div class="ui-menu__sep" role="separator"></div>
+                        <div class="ui-menu__label">Theme</div>
+                        <button type="button" class="ui-menu__item" role="menuitemradio" aria-checked="@(_theme == "light" ? "true" : "false")" @onclick='() => SetTheme("light")'><Icon Name="sun" Size="15" />Light</button>
+                        <button type="button" class="ui-menu__item" role="menuitemradio" aria-checked="@(_theme == "dark" ? "true" : "false")" @onclick='() => SetTheme("dark")'><Icon Name="moon" Size="15" />Dark</button>
+                        <button type="button" class="ui-menu__item" role="menuitemradio" aria-checked="@(_theme == "system" ? "true" : "false")" @onclick='() => SetTheme("system")'><Icon Name="monitor" Size="15" />System</button>
+                        <div class="ui-menu__sep" role="separator"></div>
+                        <form method="post" action="/account/logout"><AntiforgeryToken /><button type="submit" class="ui-menu__item" role="menuitem"><Icon Name="logout" Size="15" />Sign out</button></form>
+                    </ChildContent>
+                </Dropdown>
+            }
+        </header>
+        <main id="main" class="app-main" tabindex="-1">
+            <div class="app-aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+            <CascadingValue Name="OpenNav" Value="_openNav" IsFixed="true">@Body</CascadingValue>
+        </main>
+    </div>
+</div>
+
+<Toasts />
+<CommandPalette @bind-Open="_palette" Pages="PalettePages" Search="SearchAsync" />
+<Dialog @bind-Open="_help" Title="Keyboard shortcuts" Icon="keyboard">
+    <dl class="ui-fields">
+        <div class="ui-fields__row"><dt><kbd>⌘</kbd> <kbd>K</kbd> or <kbd>/</kbd></dt><dd>Search and jump anywhere</dd></div>
+        <div class="ui-fields__row"><dt><kbd>g</kbd> <kbd>o</kbd></dt><dd>Overview</dd></div>
+        <div class="ui-fields__row"><dt><kbd>g</kbd> <kbd>b</kbd></dt><dd>Backups</dd></div>
+        <div class="ui-fields__row"><dt><kbd>g</kbd> <kbd>n</kbd></dt><dd>Create a backup</dd></div>
+        <div class="ui-fields__row"><dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Recovery</dd></div>
+        <div class="ui-fields__row"><dt><kbd>g</kbd> <kbd>d</kbd></dt><dd>Storage &amp; DR</dd></div>
+        <div class="ui-fields__row"><dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>j</kbd> <kbd>k</kbd></dt><dd>Move through a list</dd></div>
+        <div class="ui-fields__row"><dt><kbd>↵</kbd></dt><dd>Open the selected item</dd></div>
+        <div class="ui-fields__row"><dt><kbd>[</kbd></dt><dd>Collapse or expand the sidebar</dd></div>
+        <div class="ui-fields__row"><dt><kbd>Esc</kbd></dt><dd>Close dialogs and menus</dd></div>
+    </dl>
+</Dialog>
+
+@code {
+    [Inject] private Microsoft.Extensions.Options.IOptions<FrontendOptions> Frontend { get; set; } = default!;
+    private bool ReadOnlyReview => Frontend.Value.ReadOnlyReview;
+    private bool _rail, _open, _palette, _help, _dark;
+    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+    private Action? _openNav;
+    private static string RoleLabel(CurrentUserDto me) => me.Roles.FirstOrDefault() switch
+    {
+        Roles.PlatformAdministrator => "Platform administrator", Roles.BackupAdministrator => "Backup administrator",
+        Roles.BackupOperator => "Backup operator", Roles.RestoreOperator => "Restore operator", Roles.Auditor => "Auditor", Roles.Viewer => "Viewer", var r => r ?? "",
+    };
+    private bool Visible(Nav.Item i) => i.Permission is null || CurrentUser.Can(i.Permission);
+    private string _theme = "system";
+    private string _path = "";
+    private DotNetObjectReference<AppShell>? _ref;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _path = NavManager.ToBaseRelativePath(NavManager.Uri);
+        _openNav = () => { _open = true; InvokeAsync(StateHasChanged); };
+        await CurrentUser.EnsureLoadedAsync();
+        NavManager.LocationChanged += OnLocation;
+        if (CurrentUser.User?.MustChangePassword == true && !_path.StartsWith("account", StringComparison.OrdinalIgnoreCase)) NavManager.NavigateTo("/account/security");
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first) return;
+        _ref = DotNetObjectReference.Create(this);
+        await Js.InvokeVoidAsync("registerShortcuts", _ref);
+        await Clock.InitializeAsync();
+        _theme = await Js.InvokeAsync<string>("getTheme") ?? "system";
+        _dark = await Js.InvokeAsync<bool>("isDarkTheme");
+        _rail = await Js.InvokeAsync<string>("getPref", "rail") == "1";
+        foreach (var g in (await Js.InvokeAsync<string>("getPref", "navCollapsed") ?? "").Split('|', StringSplitOptions.RemoveEmptyEntries)) _collapsed.Add(g);
+        StateHasChanged();
+    }
+
+    private void OnLocation(object? s, LocationChangedEventArgs e)
+    {
+        var before = _path.Split('?')[0];
+        _path = NavManager.ToBaseRelativePath(NavManager.Uri);
+        _open = false;
+        InvokeAsync(StateHasChanged);
+        if (before != _path.Split('?')[0]) _ = Js.InvokeVoidAsync("resetScroll");
+    }
+
+    private async Task ToggleGroup(string g)
+    {
+        if (!_collapsed.Remove(g)) _collapsed.Add(g);
+        await Js.InvokeVoidAsync("setPref", "navCollapsed", string.Join('|', _collapsed));
+    }
+
+    private async Task ToggleRail() { _rail = !_rail; await Js.InvokeVoidAsync("setPref", "rail", _rail ? "1" : "0"); }
+    private async Task SetTheme(string mode) { _theme = mode; _dark = await Js.InvokeAsync<string>("setTheme", mode) == "dark"; }
+    private Task QuickTheme() => SetTheme(_dark ? "light" : "dark");
+
+    [JSInvokable]
+    public Task OnShortcut(string action)
+    {
+        if (action == "palette") _palette = true;
+        else if (action == "help") _help = true;
+        else if (action == "rail") _ = ToggleRail();
+        else if (action.StartsWith("nav:", StringComparison.Ordinal)) NavManager.NavigateTo(action[4..]);
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<CommandPalette.Entry> PalettePages =>
+        Nav.Items.Where(i => i.Permission is null || CurrentUser.Can(i.Permission))
+            .Select(i => new CommandPalette.Entry("Go to", i.Label, i.Group == Nav.Workspace ? null : i.Group, i.Href, i.Icon))
+            .Concat(Actions).ToList();
+
+    private IEnumerable<CommandPalette.Entry> Actions
+    {
+        get
+        {
+            if (CurrentUser.Can(Permissions.JobsWrite)) yield return new("Actions", "Create a backup", null, "/jobs/new", "plus");
+            if (CurrentUser.Can(Permissions.RestoresExecute)) yield return new("Actions", "Restore data", null, "/restores/new", "lifebuoy");
+            if (CurrentUser.Can(Permissions.StorageWrite)) yield return new("Actions", "Add storage", null, "/storage/new", "storage");
+        }
+    }
+
+    private async Task<IReadOnlyList<CommandPalette.Entry>> SearchAsync(string q, CancellationToken ct)
+    {
+        var r = await SearchApi.SearchAsync(q, ct);
+        if (!r.Ok || r.Value is null) return [];
+        return r.Value.Select(x => new CommandPalette.Entry(x.Type switch { "job" or "backupjob" => "Backups", "server" => "Servers", "run" => "Backup history", "restore" => "Restores", "destination" or "s3" => "Storage", "template" => "Templates", "user" => "Users", _ => "Results" },
+            x.Title, x.Subtitle, x.Url, x.Type switch { "job" or "backupjob" => "jobs", "server" => "server", "run" => "history", "restore" => "lifebuoy", "destination" or "s3" => "storage", "template" => "template", "user" => "user", _ => "arrow-right" })).ToList();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        NavManager.LocationChanged -= OnLocation;
+        await Js.InvokeVoidAsync("unregisterShortcuts");
+        _ref?.Dispose();
+    }
+}

@@ -1,0 +1,32 @@
+@implements IDisposable
+@inject DashboardClient Dashboard
+@inject UserContext CurrentUser
+@* Live protection verdict, using the Overview's own rules. Loads after the page is interactive. *@
+@if (CurrentUser.Can(Permissions.DashboardRead))
+{
+    <a class="app-health app-health--@_tone" href="/" title="@_sub" aria-label="@($"Protection status: {_title}. {_sub}")">
+        <span class="app-health__dot" aria-hidden="true"></span>
+        <span class="app-health__text"><span class="app-health__title">@_title</span><span class="app-health__sub">@_sub</span></span>
+    </a>
+}
+@code {
+    private string _tone = "muted", _title = "Checking…", _sub = "Protection status";
+    private Timer? _timer;
+    protected override async Task OnInitializedAsync() => await CurrentUser.EnsureLoadedAsync();
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first || !CurrentUser.Can(Permissions.DashboardRead)) return;
+        await Load(); StateHasChanged();
+        _timer = new Timer(_ => InvokeAsync(async () => { await Load(); StateHasChanged(); }), null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+    }
+    private async Task Load()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var r = await Dashboard.GetAsync(now.AddDays(-7), now);
+        if (!r.Ok || r.Value is null) { (_tone, _title, _sub) = ("muted", "Status unavailable", "Open the overview"); return; }
+        var s = ProtectionSummary.From(r.Value);
+        (_tone, _title, _sub) = (s.Tone, s.Title, s.Subtitle);
+        if (s.Problems == 0 && r.Value.Kpis.ActiveJobs == 0) (_tone, _title, _sub) = ("warning", "No backups scheduled", "Every job is paused");
+    }
+    public void Dispose() => _timer?.Dispose();
+}

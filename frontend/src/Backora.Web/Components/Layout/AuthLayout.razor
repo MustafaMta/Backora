@@ -1,0 +1,27 @@
+@inherits LayoutComponentBase
+<div class="app-auth ui-dark">
+    <aside class="app-auth__brand" data-az>
+        <canvas class="az-gl" data-az-gl aria-hidden="true"></canvas>
+        <div class="az-grid"></div>
+        <div class="az-spot"></div>
+        <div class="app-auth__logo"><BrandMark Size="44" /><span class="app-auth__word"><b>Backora</b><small>Data protection</small></span></div>
+        <div class="app-auth__story">
+            <span class="app-auth__eyebrow">Backup · Disaster recovery · Restore</span>
+            <h2>Data protection,<br /><em>built to endure.</em></h2>
+            <p>Scheduled database and file backups, verified copies at every site you trust, and restores you can prove.</p>
+        </div>
+        <div class="app-auth__art"><div class="app-auth__art-p"><AuthArt /></div></div>
+        <ul class="app-auth__caps">
+            <li><span class="app-auth__cap-icon"><Icon Name="encrypted-archive" Size="16" /></span><div><b>Client-side encryption</b><small>Encrypt backups before they reach storage.</small></div></li>
+            <li><span class="app-auth__cap-icon"><Icon Name="topology" Size="16" /></span><div><b>Multi-site recovery</b><small>Copy every backup to primary and DR sites.</small></div></li>
+            <li><span class="app-auth__cap-icon"><Icon Name="verified" Size="16" /></span><div><b>Verified restores</b><small>Checksums on every copy, restores you can prove.</small></div></li>
+        </ul>
+    </aside>
+    <div class="app-auth__panel">
+        <main id="main" class="app-auth__form">
+            <div class="app-auth__logo app-auth__mobilelogo"><BrandMark Size="40" /><span class="app-auth__word"><b>Backora</b><small>Data protection</small></span></div>
+            @Body
+        </main>
+        <div class="app-auth__meta"><span><Icon Name="lock" Size="12" />Encrypted connection</span><span class="app-auth__dot"></span><span><Icon Name="shield-check" Size="12" />Every sign-in is audited</span></div>
+    </div>
+</div>

@@ -1,0 +1,5 @@
+<nav class="ui-tabs" aria-label="Recovery">
+    <a href="/recovery" aria-current="@(Active == "points" ? "page" : null)"><Icon Name="recovery-point" Size="15" />Recovery points</a>
+    <a href="/restores" aria-current="@(Active == "restores" ? "page" : null)"><Icon Name="restore" Size="15" />Restores</a>
+</nav>
+@code { [Parameter] public string Active { get; set; } = "points"; }

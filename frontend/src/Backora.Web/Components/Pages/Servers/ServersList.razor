@@ -1,0 +1,88 @@
+@page "/servers"
+<PageTitle>Servers · Backora</PageTitle>
+
+<PageHead Title="Protected servers" Subtitle="The systems Backora backs up, reached securely through the execution host.">
+    <Actions>@if (Can(Permissions.ServersWrite)) { <Btn Variant="primary" Href="/servers/new" Icon="plus">Add server</Btn> }</Actions>
+    <Below>
+        <div class="viewbar">
+            <nav class="ui-tabs" aria-label="Views">
+                @foreach (var f in Filters) { <button type="button" aria-selected="@(_filter == f.Key ? "true" : "false")" @onclick="() => _filter = f.Key">@f.Label<span class="ui-count">@(_page is null ? 0 : Filtered(f.Key).Count())</span></button> }
+            </nav>
+            <div class="viewbar__end"><SearchBox Placeholder="Search by name or address" Value="@_q" OnSearch="SearchAsync" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load servers" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_page is null) { <ListSkel Rows="3" /> }
+    else if (_page.Items.Count == 0)
+    {
+        <Empty Art="servers" Title="@(_q is null ? "No servers yet" : "No servers match")" Message="@(_q is null ? "Add the servers that run your databases. Backora reaches them through the execution host." : "Try another name.")">
+            <Actions>@if (_q is null && Can(Permissions.ServersWrite)) { <Btn Variant="primary" Href="/servers/new" Icon="plus">Add server</Btn> }</Actions>
+        </Empty>
+    }
+    else
+    {
+        var rows = Filtered(_filter).ToList();
+        <div class="ui-list__head cols-server" aria-hidden="true"><span></span><span>Server</span><span>Databases</span><span>Connection</span><span>Latest backup</span><span>Protection</span><span></span></div>
+        <div class="ui-list" role="list">
+            @if (rows.Count == 0) { <Empty Compact="true" Art="search" Title="Nothing in this view" /> }
+            @foreach (var s in rows)
+            {
+                var engines = EnginesOf(s.Id);
+                <a class="ui-list__row cols-server" href="/servers/@s.Id" role="listitem">
+                    <span class="ui-glyph ui-glyph--accent"><Icon Name="server" Size="15" /></span>
+                    <span style="min-width:0"><span class="ui-list__title" style="display:block">@s.Name</span><span class="ui-list__sub mono" style="display:block">@s.SshUser@@@s.Host</span></span>
+                    <span class="hide-sm row" style="gap:6px;flex-wrap:wrap">
+                        @if (engines.Count == 0) { <span class="ui-list__meta muted">No backup jobs</span> }
+                        @foreach (var e in engines) { <span class="ui-badge"><span class="ui-glyph @Ui.EngineGlyph(e)" style="width:16px;height:16px;background:none"><Icon Name="@Ui.Engine(e)" Size="12" /></span>@Ui.EngineLabel(e)</span> }
+                    </span>
+                    <span class="hide-sm"><StatusBadge View="Connection(s)" /></span>
+                    <span class="ui-list__meta hide-sm">@if (s.LastBackupAt is null) { <span class="muted">Never</span> } else { <Ago Value="s.LastBackupAt" /> }</span>
+                    <StatusBadge View="State(s, _jobs)" />
+                    <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                </a>
+            }
+        </div>
+        <Pager Total="rows.Count" One="server" Many="servers" />
+    }
+</div>
+
+@code {
+    private PagedResult<ServerDto>? _page;
+    private List<BackupJobDto> _jobs = [];
+    private List<string> EnginesOf(long serverId) => _jobs.Where(j => j.ServerId == serverId).Select(j => Ui.Engine(j.Category) switch { "postgresql" => "PostgreSQL", "mariadb" => "MariaDB", "folder" => "Files", _ => j.Category }).Distinct().ToList();
+
+    internal static StatusView Connection(ServerDto s) =>
+        s.HostKeyTrustedAt is null ? new("Identity not confirmed", StatusTone.Warning)
+        : s.LastConnectionTestSucceeded == false ? new("Can't connect", StatusTone.Danger, null, s.LastConnectionTestMessage)
+        : s.LastConnectionTestSucceeded == true ? new("Connected", StatusTone.Success)
+        : new("Trusted", StatusTone.Success);
+    private string? _error, _q;
+    private string _filter = "all";
+    private static readonly (string Key, string Label)[] Filters = [("all", "All servers"), ("attention", "Needs attention"), ("unprotected", "No active backup")];
+
+    private IEnumerable<ServerDto> Filtered(string key) => key switch
+    {
+        "attention" => _page!.Items.Where(s => s.HostKeyTrustedAt is null || s.LastConnectionTestSucceeded == false || s.Health is HealthState.Critical or HealthState.Warning),
+        "unprotected" => _page!.Items.Where(s => _jobs.All(j => j.ServerId != s.Id || j.Status != JobStatusDto.Active)),
+        _ => _page!.Items,
+    };
+
+    internal static StatusView State(ServerDto s, IEnumerable<BackupJobDto>? jobs = null) =>
+        s.JobCount == 0 ? new("Unprotected", StatusTone.Warning, null, "No backup job protects this server.")
+        : jobs is not null && !jobs.Any(j => j.ServerId == s.Id && j.Status == JobStatusDto.Active) ? new("Paused", StatusTone.Warning, "pause", "Every backup job for this server is paused.")
+        : s.Health switch { HealthState.Critical => new("Failing", StatusTone.Danger), HealthState.Warning => new("Needs a look", StatusTone.Warning), _ => new("Protected", StatusTone.Success) };
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var jobs = Can(Permissions.JobsRead) ? Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name") : null;
+        var r = await Api.Servers.ListAsync(_q, 1, 200, "name"); _error = ErrorOf(r);
+        if (jobs is not null) _jobs = (await jobs).Value?.Items.ToList() ?? [];
+        _page = r.Value;
+    }
+    private Task SearchAsync(string? q) { _q = q; return LoadAsync(); }
+}

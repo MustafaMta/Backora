@@ -1,0 +1,290 @@
+@page "/restores/new"
+@implements IAsyncDisposable
+<PageTitle>Restore data · Backora</PageTitle>
+
+<PageHead Title="Restore data" Subtitle="A guided recovery. Nothing is written until you confirm the last step." BackHref="/recovery" BackLabel="Recovery" />
+
+@if (!Can(Permissions.RestoresExecute))
+{
+    <div class="app-page"><Empty Title="You can't start restores" Message="Ask an administrator for the Restore Operator role." /></div>
+}
+else
+{
+    <div class="app-page create">
+      <div class="create__main">
+        <section class="create-card" aria-labelledby="step-title">
+        <div class="create-card__progress"><Steps Items="StepItems" Current="(int)_step" MaxReachable="(int)_step" Label="Restore" OnSelect="GoToNumber" /></div>
+        <div class="create-card__body" @key="_step">
+            @switch (_step)
+            {
+                case Step.What:
+                    <div><h2 id="step-title" class="wiz__title">What do you want to recover?</h2><p class="wiz__lead">Choose the backup job that protected the data.</p></div>
+                    @if (_error is not null) { <div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div>@_error</div></div> }
+                    else if (_all is null) { <Loading Text="Finding recoverable data…" /> }
+                    else if (Jobs.Count == 0) { <Empty Compact="true" Icon="recovery-point" Title="Nothing to recover yet" Message="Recovery points appear after a backup is verified and copied." /> }
+                    else
+                    {
+                        <div class="ui-choices" role="radiogroup" aria-label="Backup jobs">
+                            @foreach (var g in Jobs)
+                            {
+                                var p = g.First();
+                                <Choice Title="@p.JobName" Subtitle="@($"{p.ServerName} · latest {Fmt.Relative(p.CompletedAt ?? p.CreatedAt)}")" Icon="database" Selected="_jobId == g.Key" OnSelect="() => PickJob(g.Key)">
+                                    <Facts><span><Icon Name="recovery-point" Size="12" />@Ui.Plural(g.Select(x => x.BackupRunId ?? -x.Id).Distinct().Count(), "recovery point", "recovery points")</span><span><Icon Name="topology" Size="12" />@Ui.Plural(g.Select(x => x.DestinationId).Distinct().Count(), "site", "sites")</span></Facts>
+                                </Choice>
+                            }
+                        </div>
+                    }
+                    break;
+
+                case Step.Point:
+                    <div><h2 id="step-title" class="wiz__title">Choose a recovery point</h2><p class="wiz__lead">Each point is one backup, newest first. Pick the moment you want back.</p></div>
+                    <div class="ui-choices" role="radiogroup" aria-label="Recovery points">
+                        @foreach (var set in Points)
+                        {
+                            var head = set.First();
+                            var verified = set.Any(c => c.VerificationStatus == VerificationStatusDto.Verified);
+                            <Choice Title="@Clock.Format(head.CompletedAt ?? head.CreatedAt)" Subtitle="@($"{Fmt.Relative(head.CompletedAt ?? head.CreatedAt)} · {(head.BytesTotal is null ? head.LegacyTotalSize ?? "size unknown" : Fmt.Bytes(head.BytesTotal))}")" Icon="recovery-point" Selected="_pointKey == set.Key" OnSelect="() => PickPoint(set.Key)">
+                                <Facts>
+                                    <span>@Ui.Plural(set.Count(), "copy", "copies")</span>
+                                    @if (verified) { <span class="t-ok"><Icon Name="verified" Size="12" />Verified</span> } else { <span class="t-warn"><Icon Name="alert" Size="12" />Not verified</span> }
+                                    @if (set.Any(c => c.Encrypted)) { <span><Icon Name="lock" Size="12" />Encrypted</span> }
+                                </Facts>
+                            </Choice>
+                        }
+                    </div>
+                    break;
+
+                case Step.Copy:
+                    <div><h2 id="step-title" class="wiz__title">Choose which copy to restore from</h2><p class="wiz__lead">Every site holds an independent copy. Use any one that's verified.</p></div>
+                    <div class="ui-choices" role="radiogroup" aria-label="Copies">
+                        @foreach (var c in Copies)
+                        {
+                            <Choice Title="@c.DestinationName" Subtitle="@(c.IsReplica ? $"DR copy, replicated from {c.SourceDestinationName}" : "Primary copy")" Icon="@(c.IsReplica ? "topology" : "s3")" GlyphClass="@(c.IsReplica ? "ui-glyph--flow" : "ui-glyph--accent")" Selected="_copy?.Id == c.Id" OnSelect="() => PickCopy(c)">
+                                <Facts>
+                                    @if (c.VerificationStatus == VerificationStatusDto.Verified) { <span class="t-ok"><Icon Name="verified" Size="12" />Checksums verified</span> }
+                                    else if (c.VerificationStatus == VerificationStatusDto.Failed) { <span class="t-bad"><Icon Name="circle-alert" Size="12" />Verification failed</span> }
+                                    else { <span class="t-warn"><Icon Name="alert" Size="12" />Not verified</span> }
+                                    @if (c.Encrypted) { <span><Icon Name="lock" Size="12" />Needs your private key</span> }
+                                    <span>@(c.BytesTotal is null ? c.LegacyTotalSize ?? "" : Fmt.Bytes(c.BytesTotal))</span>
+                                </Facts>
+                            </Choice>
+                        }
+                    </div>
+                    break;
+
+                case Step.Destination:
+                    <div><h2 id="step-title" class="wiz__title">Where will the data go?</h2><p class="wiz__lead">Backora checks the copy and the destination before anything starts.</p></div>
+                    <div class="ui-choices" role="radiogroup" aria-label="Destination">
+                        <Choice Title="New isolated folder on shared storage" Subtitle="@(_precheck?.TargetPath ?? "Chosen after the checks below")" Icon="folder" GlyphClass="ui-glyph--accent" Selected="true" />
+                        <Choice Title="Replace a live database" Subtitle="Not available. Backora never overwrites running systems; load the restored files yourself." Icon="database" Disabled="true" />
+                    </div>
+                    @if (_precheckLoading) { <Loading Text="Checking the copy and the destination…" /> }
+                    else if (_precheckError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_precheckError <button type="button" class="ui-btn ui-btn--sm" @onclick="RunPrecheckAsync">Check again</button></div></div> }
+                    else if (_precheck is not null)
+                    {
+                        <div class="ui-callout @(_precheck.CanRestore ? "ui-callout--ok" : "ui-callout--bad")"><Icon Name="@(_precheck.CanRestore ? "circle-check" : "circle-alert")" Size="15" /><div><strong>@(_precheck.CanRestore ? "All checks passed." : "This copy can't be restored right now.")</strong> @(_precheck.CanRestore ? "" : "Choose another copy or fix the failed check.")</div></div>
+                        <ul class="stack-sm">
+                            @foreach (var c in _precheck.Checks)
+                            {
+                                var cv = StatusMap.Check(c.State);
+                                <li class="row small" style="align-items:flex-start"><StatusBadge View="cv" IconOnly="true" /><span><span class="strong">@c.Name</span> <span class="muted">@c.Message</span></span></li>
+                            }
+                        </ul>
+                    }
+                    break;
+
+                case Step.Review:
+                    <div><h2 id="step-title" class="wiz__title">Review the impact</h2><p class="wiz__lead">Read this before you continue.</p></div>
+                    @if (_precheck is not null)
+                    {
+                        var rp = _precheck.RecoveryPoint;
+                        <div class="impact">
+                            <div class="impact__item"><small>Data as of</small><b>@Clock.Format(rp.CompletedAt ?? rp.CreatedAt)</b><small>@Fmt.Relative(rp.CompletedAt ?? rp.CreatedAt)</small></div>
+                            <div class="impact__item"><small>Restored from</small><b>@rp.DestinationName</b><small>@(rp.IsReplica ? "DR copy" : "Primary copy") · @StatusMap.Verification(rp.VerificationStatus).Label.ToLowerInvariant()</small></div>
+                            <div class="impact__item"><small>Amount</small><b>@Fmt.Bytes(_precheck.ExpectedBytes)</b><small>@Ui.Plural(_precheck.ExpectedFiles, "file", "files")</small></div>
+                        </div>
+                        <div class="review">
+                            <ReviewRow Icon="folder" Label="Writes to" Value="@_precheck.TargetPath" Sub="A new folder created for this restore" />
+                            <ReviewRow Icon="shield-check" Label="Replaces existing data" Value="No" Sub="Nothing that exists today is overwritten or deleted" />
+                            <ReviewRow Icon="audit" Label="Recorded" Value="In the audit log, with your name and reason" />
+                        </div>
+                        @if (rp.VerificationStatus != VerificationStatusDto.Verified)
+                        {
+                            <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div><strong>This copy isn't verified.</strong> Its checksums weren't confirmed after upload. Prefer a verified copy when one exists.</div></div>
+                        }
+                        @if (RequiresKey)
+                        {
+                            <div class="wiz__section">
+                                <h3>Private key</h3>
+                                <p class="small soft">This copy is encrypted with your key. Backora checks it matches, uses it in memory for this restore only, and never stores it.</p>
+                                <KeyField Value="@_key" ValueChanged="OnKeyChanged" Error="@_keyError" Disabled="_verifying" />
+                                @if (rp.EncryptionKeyFingerprint is { } fp) { <p class="xs muted row"><Icon Name="fingerprint" Size="13" />Expected key <span class="mono">@fp</span></p> }
+                                @if (_keyCheck is { Matches: true }) { <div class="ui-callout ui-callout--ok"><Icon Name="circle-check" Size="15" /><div><strong>Key matches.</strong></div></div> }
+                                else if (_keyCheck is { Matches: false }) { <div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div>@_keyCheck.Message</div></div> }
+                            </div>
+                        }
+                    }
+                    break;
+
+                default:
+                    <div><h2 id="step-title" class="wiz__title">Confirm and restore</h2><p class="wiz__lead">Restores are recorded in the audit log.</p></div>
+                    @if (_precheck is not null)
+                    {
+                        <FormField Label="Reason" For="reason" Hint="For example: a ticket number, or what you're recovering and why." Required="true" Error="@_createResult?.FieldError("Reason")">
+                            <input id="reason" class="ui-input" @bind="_reason" @bind:event="oninput" maxlength="500" />
+                        </FormField>
+                        <FormField Label="@($"Type {_precheck.ConfirmationPhrase} to confirm")" For="confirm" Required="true" Error="@_createResult?.FieldError("ConfirmationPhrase")">
+                            <input id="confirm" class="ui-input mono" @bind="_confirmation" @bind:event="oninput" autocomplete="off" spellcheck="false" />
+                        </FormField>
+                        @if (_createError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_createError</div></div> }
+                    }
+                    break;
+            }
+        </div>
+        <div class="create-card__foot">
+            @if (_step != Step.What) { <Btn Variant="ghost" Icon="arrow-left" Disabled="@(_creating || _verifying)" OnClick="BackAsync">Back</Btn> }
+            <span class="grow">Step @((int)_step) of 6</span>
+            @switch (_step)
+            {
+                case Step.What: <Btn Variant="primary" TrailingIcon="arrow-right" Disabled="@(_jobId is null)" OnClick="() => Go(Step.Point)">Continue</Btn> break;
+                case Step.Point: <Btn Variant="primary" TrailingIcon="arrow-right" Disabled="@(_pointKey is null)" OnClick="() => Go(Step.Copy)">Continue</Btn> break;
+                case Step.Copy: <Btn Variant="primary" TrailingIcon="arrow-right" Disabled="@(_copy is null)" OnClick="GoDestinationAsync">Continue</Btn> break;
+                case Step.Destination: <Btn Variant="primary" TrailingIcon="arrow-right" Disabled="@(!CanLeaveCheck)" OnClick="() => Go(Step.Review)">Continue</Btn> break;
+                case Step.Review: <Btn Variant="primary" TrailingIcon="arrow-right" Busy="_verifying" Disabled="@(!CanLeaveReview)" OnClick="LeaveReviewAsync">@(RequiresKey && _keyCheck is not { Matches: true } ? "Check key" : "Continue")</Btn> break;
+                default: <Btn Variant="primary" Icon="restore" Busy="_creating" Disabled="@(!CanStart)" OnClick="StartAsync">Start restore</Btn> break;
+            }
+        </div>
+        </section>
+      </div>
+      <aside class="create__aside" aria-label="Restore plan">
+        <div class="plan">
+            <div class="plan__head"><Icon Name="restore" Size="15" Class="t-accent" /><h3>Restore plan</h3></div>
+            <div class="plan__rows">
+                <PlanRow Icon="database" Label="Data from" Value="@(PlanJob?.JobName)" Sub="@PlanJob?.ServerName" />
+                <PlanRow Icon="recovery-point" Glyph="ui-glyph--flow" Label="Recovery point" Value="@(PlanPoint is null ? null : Clock.Format(PlanPoint.CompletedAt ?? PlanPoint.CreatedAt))" Sub="@(PlanPoint is null ? null : Fmt.Relative(PlanPoint.CompletedAt ?? PlanPoint.CreatedAt))" />
+                <PlanRow Icon="@(_copy?.IsReplica == true ? "topology" : "s3")" Glyph="ui-glyph--accent" Label="Copy" Value="@_copy?.DestinationName" Sub="@(_copy is null ? null : $"{(_copy.IsReplica ? "DR copy" : "Primary copy")} · {StatusMap.Verification(_copy.VerificationStatus).Label.ToLowerInvariant()}")" />
+                <PlanRow Icon="folder" Label="Destination" Value="@(_precheck?.TargetPath ?? (_step >= Step.Destination ? "New isolated folder" : null))" Sub="@(_step >= Step.Destination ? "Nothing existing is replaced" : null)" />
+                @if (RequiresKey) { <PlanRow Icon="private-key" Glyph="ui-glyph--warn" Label="Private key" Value="@(_keyCheck is { Matches: true } ? "Verified, in memory only" : "Required")" /> }
+            </div>
+            <div class="plan__foot"><Icon Name="audit" Size="14" /><span>Every restore is recorded in the audit log with your name and reason.</span></div>
+        </div>
+      </aside>
+    </div>
+}
+
+@code {
+    internal enum Step { What = 1, Point = 2, Copy = 3, Destination = 4, Review = 5, Confirm = 6 }
+    [SupplyParameterFromQuery(Name = "recoveryPointId")] public long? RecoveryPointId { get; set; }
+    [SupplyParameterFromQuery(Name = "jobId")] public long? JobIdParam { get; set; }
+
+    private static readonly IReadOnlyList<Steps.Item> StepItems = [new("What"), new("Recovery point"), new("Copy"), new("Destination"), new("Impact"), new("Confirm")];
+    private Step _step = Step.What;
+    private List<OffloadSummaryDto>? _all;
+    private string? _error;
+    private long? _jobId, _pointKey;
+    private OffloadSummaryDto? _copy;
+
+    private RestorePrecheckResponse? _precheck;
+    private bool _precheckLoading;
+    private string? _precheckError;
+
+    // The private key lives only in this field, only on the review/confirm steps. Never logged, toasted, persisted or put in a URL.
+    private string? _key;
+    private KeyVerificationDto? _keyCheck;
+    private string? _keyError;
+    private bool _verifying;
+
+    private string _reason = string.Empty, _confirmation = string.Empty;
+    private bool _creating;
+    private string? _createError, _idempotencyKey;
+    private ApiResult? _createResult;
+
+    private List<IGrouping<long, OffloadSummaryDto>> Jobs => _all!.Where(p => p.BackupJobId is not null).GroupBy(p => p.BackupJobId!.Value).OrderByDescending(g => g.Max(p => p.CompletedAt ?? p.CreatedAt)).ToList();
+    private List<IGrouping<long, OffloadSummaryDto>> Points => (_all ?? []).Where(p => p.BackupJobId == _jobId).GroupBy(p => p.BackupRunId ?? -p.Id).OrderByDescending(g => g.Max(p => p.CompletedAt ?? p.CreatedAt)).ToList();
+    private List<OffloadSummaryDto> Copies => Points.FirstOrDefault(g => g.Key == _pointKey)?.OrderBy(c => c.IsReplica).ThenBy(c => c.DestinationName).ToList() ?? [];
+    private OffloadSummaryDto? PlanJob => _jobId is null || _all is null ? null : _all.FirstOrDefault(p => p.BackupJobId == _jobId);
+    private OffloadSummaryDto? PlanPoint => _pointKey is null ? null : Points.FirstOrDefault(g => g.Key == _pointKey)?.First();
+    private bool RequiresKey => (_precheck?.RecoveryPoint ?? _copy)?.Encrypted == true;
+
+    internal bool CanLeaveCheck => _precheck is { CanRestore: true } && !_precheckLoading && _precheck.RecoveryPoint.Id == _copy?.Id;
+    internal bool CanLeaveReview => !_verifying && (!RequiresKey || (KeyField.LooksValid(_key) && _keyCheck is not { Matches: false }));
+    internal bool CanStart => _precheck is { CanRestore: true } && !string.IsNullOrWhiteSpace(_reason)
+        && string.Equals(_confirmation.Trim(), _precheck.ConfirmationPhrase, StringComparison.Ordinal) && !_creating
+        && (!RequiresKey || (KeyField.LooksValid(_key) && _keyCheck is { Matches: true }));
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        if (!Can(Permissions.RestoresExecute)) return;
+        var r = await Api.RecoveryPoints.ListAsync(new RecoveryPointFilter(), 1, 200, "-createdAt");
+        _error = ErrorOf(r);
+        _all = r.Value?.Items.Where(p => p.Status == OffloadStatusDto.Completed && p.RetentionState is RetentionStateDto.Active or RetentionStateDto.Expired).ToList();
+        if (_all is null) return;
+        if (RecoveryPointId is long id && _all.FirstOrDefault(p => p.Id == id) is { } point)
+        {
+            _jobId = point.BackupJobId; _pointKey = point.BackupRunId ?? -point.Id; _copy = point;
+            await GoDestinationAsync();
+        }
+        else if (JobIdParam is long jid && _all.Any(p => p.BackupJobId == jid)) { _jobId = jid; _step = Step.Point; }
+    }
+
+    private void PickJob(long id) { if (_jobId != id) { _pointKey = null; _copy = null; _precheck = null; } _jobId = id; }
+    private void PickPoint(long key) { if (_pointKey != key) { _copy = null; _precheck = null; } _pointKey = key; var only = Copies; if (only.Count == 1) _copy = only[0]; }
+    private void PickCopy(OffloadSummaryDto c) { if (_copy?.Id != c.Id) { _precheck = null; ClearKey(); _confirmation = string.Empty; } _copy = c; }
+
+    private void Go(Step next)
+    {
+        if (!(next == Step.Confirm && _step == Step.Review)) { if (next < Step.Review || next == Step.What) ClearKey(); }
+        _createError = null;
+        _step = next;
+    }
+
+    private Task GoToNumber(int n) { if (n >= 1 && n < (int)_step) Go((Step)n); return Task.CompletedTask; }
+    private Task BackAsync() { Go(_step - 1); return Task.CompletedTask; }
+
+    private async Task GoDestinationAsync() { if (_copy is null) return; Go(Step.Destination); await RunPrecheckAsync(); }
+
+    private async Task RunPrecheckAsync()
+    {
+        if (_copy is null) return;
+        _precheckLoading = true; _precheckError = null; _precheck = null;
+        StateHasChanged();
+        var r = await Api.Restores.PrecheckAsync(_copy.Id);
+        _precheckLoading = false;
+        if (r.Ok && r.Value is not null) _precheck = r.Value; else _precheckError = ErrorOf(r);
+    }
+
+    private void ClearKey() { _key = null; _keyCheck = null; _keyError = null; }
+    private void OnKeyChanged(string? v) { _key = v; _keyCheck = null; _keyError = null; }
+
+    private async Task VerifyKeyAsync()
+    {
+        if (_precheck is null || !KeyField.LooksValid(_key)) return;
+        _verifying = true; _keyError = null; _keyCheck = null;
+        var r = await Api.RecoveryPoints.VerifyKeyAsync(_precheck.RecoveryPoint.Id, _key!.Trim());
+        _verifying = false;
+        if (r.Ok && r.Value is not null) { _keyCheck = r.Value; return; }
+        if (r.Outcome == ApiOutcome.Unauthorized) { ClearKey(); RedirectToLogin(); return; }
+        _keyError = r.Outcome == ApiOutcome.ValidationFailed ? r.FieldError("PrivateKey") ?? r.Problem?.Detail ?? "This key couldn't be read. Paste the whole AGE-SECRET-KEY-1… line." : r.Message;
+    }
+
+    private async Task LeaveReviewAsync()
+    {
+        if (RequiresKey && _keyCheck is null) await VerifyKeyAsync();
+        if (!RequiresKey || _keyCheck is { Matches: true }) Go(Step.Confirm);
+    }
+
+    private async Task StartAsync()
+    {
+        if (!CanStart || _precheck is null) return;
+        _creating = true; _createError = null;
+        _idempotencyKey ??= NewIdempotencyKey(); // reused on retry so a double click never starts two restores
+        var r = await Api.Restores.CreateAsync(new CreateRestoreRequest(_precheck.RecoveryPoint.Id, _reason.Trim(), _confirmation.Trim(), RequiresKey ? _key?.Trim() : null), _idempotencyKey);
+        _creating = false; _createResult = r;
+        if (r.Ok && r.Value is not null) { ClearKey(); Toasts.Success("Restore started", _precheck.RecoveryPoint.JobName); Nav.NavigateTo($"/restores/{r.Value.Id}"); return; }
+        if (r.Outcome == ApiOutcome.Unauthorized) { ClearKey(); RedirectToLogin(); return; }
+        if (RequiresKey && r.FieldError("DecryptionKey") is { } keyProblem) { _idempotencyKey = null; _keyCheck = null; _step = Step.Review; _keyError = keyProblem; return; }
+        _createError = r.Message;
+    }
+
+    public ValueTask DisposeAsync() { ClearKey(); Dispose(); return ValueTask.CompletedTask; }
+}

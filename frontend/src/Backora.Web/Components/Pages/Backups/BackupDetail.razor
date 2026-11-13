@@ -1,0 +1,265 @@
+@page "/jobs/{Id:long}"
+<PageTitle>@(_job?.Name ?? "Backup job") · Backora</PageTitle>
+
+@if (_error is not null)
+{
+    <PageHead Title="Backup job" BackHref="/jobs" BackLabel="Backup jobs" />
+    <div class="app-page"><Empty Error="true" Title="We couldn't load this backup job" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty></div>
+}
+else if (_job is null) { <PageHead Title="Backup job" BackHref="/jobs" BackLabel="Backup jobs" /><Loading Text="Loading backup job…" /> }
+else
+{
+    var j = _job;
+    <PageHead Title="@j.Name" BackHref="/jobs" BackLabel="Backup jobs" Subtitle="@($"{Ui.EngineLabel(j.Category)} on {j.ServerName} · {j.TemplateName}")">
+        <Lead><span class="ui-glyph ui-glyph--lg @Ui.EngineGlyph(j.Category)"><Icon Name="@Ui.Engine(j.Category)" Size="22" /></span></Lead>
+        <Suffix><StatusBadge View="Backups.State(j)" /></Suffix>
+        <Actions>
+            @if (Can(Permissions.JobsWrite))
+            {
+                <Btn Href="@($"/jobs/{j.Id}/edit")" Icon="edit">Edit</Btn>
+                <Btn Icon="@(j.Status == JobStatusDto.Active ? "pause" : "play")" OnClick="ToggleStatusAsync">@(j.Status == JobStatusDto.Active ? "Pause" : "Resume")</Btn>
+                <Dropdown AriaLabel="More actions" ButtonClass="ui-btn ui-btn--icon">
+                    <Trigger><Icon Name="more" Size="16" /></Trigger>
+                    <ChildContent>
+                        <a class="ui-menu__item" href="/runs?jobId=@j.Id"><Icon Name="history" Size="15" />Run history</a>
+                        <a class="ui-menu__item" href="/restores/new?jobId=@j.Id"><Icon Name="restore" Size="15" />Restore from this job</a>
+                        <div class="ui-menu__sep"></div>
+                        <button type="button" class="ui-menu__item ui-menu__item--danger" @onclick="() => _confirmDelete = true"><Icon Name="trash" Size="15" />Delete job…</button>
+                    </ChildContent>
+                </Dropdown>
+            }
+            @if (Can(Permissions.JobsRun)) { <Btn Variant="primary" Icon="play" Busy="_running" OnClick="() => _confirmRun = true">Run backup</Btn> }
+        </Actions>
+    </PageHead>
+
+    <div class="app-page">
+        <div class="summary">
+            <div class="summary__item"><span class="summary__label">Latest backup</span><span class="summary__value">@if (j.LastRun is { } lr) { <StatusBadge View="StatusMap.Run(lr.Status)" IconOnly="true" /> }<span>@(j.LastSuccessAt is null ? "No success yet" : Fmt.Relative(j.LastSuccessAt))</span></span><span class="summary__sub">@(j.LastRun is { } l2 ? $"Last run {StatusMap.Run(l2.Status).Label.ToLowerInvariant()}" : "Never run")</span></div>
+            <div class="summary__item"><span class="summary__label">Next backup</span><span class="summary__value"><span>@(j.Status == JobStatusDto.Inactive ? "Paused" : j.CronExpression is null ? "Manual" : Fmt.Relative(j.NextRunAt))</span></span><span class="summary__sub">@(j.CronExpression is null ? "Runs when started" : j.ScheduleDescription)</span></div>
+            <div class="summary__item"><span class="summary__label">Primary storage</span><span class="summary__value"><Icon Name="s3" Size="15" Class="t-accent" /><span>@(j.S3DestinationName ?? "Staging only")</span></span><span class="summary__sub">@(j.S3DestinationId is null ? "Not off-site" : LatestCopyText(j.S3DestinationId.Value))</span></div>
+            <div class="summary__item"><span class="summary__label">DR protection</span><span class="summary__value"><Icon Name="topology" Size="15" Class="@(DrCount > 0 ? "t-ok" : "muted")" /><span>@(DrCount == 0 ? "No DR site" : Ui.Plural(DrCount, "DR site", "DR sites"))</span></span><span class="summary__sub">@(DrCount == 0 ? "One copy only" : string.Join(", ", j.ReplicationTargets!.Select(t => t.Name)))</span></div>
+            <div class="summary__item"><span class="summary__label">Retention</span><span class="summary__value"><span>@Ui.Keep(j.RetentionDays)</span></span><span class="summary__sub">Newest @j.MinRecoveryPointsToKeep always kept</span></div>
+        </div>
+
+        @if (j.Health == HealthState.Critical && j.HealthReason is not null)
+        {
+            <div class="ui-callout ui-callout--bad" style="margin-bottom:20px"><Icon Name="circle-alert" Size="15" /><div><strong>This job is failing.</strong> @j.HealthReason</div></div>
+        }
+        else if (j.Status == JobStatusDto.Inactive)
+        {
+            <div class="ui-callout ui-callout--warn" style="margin-bottom:20px"><Icon Name="pause" Size="15" /><div><strong>Paused.</strong> Existing recovery points stay restorable, but no new backups are taken.</div></div>
+        }
+
+        <div class="detail">
+            <div class="detail__body">
+                <Panel Title="Storage copies" Icon="topology">
+                    <Actions><a href="/storage">Storage &amp; DR</a></Actions>
+                    <ChildContent>
+                        @if (j.S3DestinationId is null)
+                        {
+                            <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div>Copies stay on the staging share only. @if (Can(Permissions.JobsWrite)) { <a href="/jobs/@j.Id/edit?step=2">Add off-site storage</a> } so this backup survives losing the building.</div></div>
+                        }
+                        else
+                        {
+                            <div class="copies">
+                                <div class="copies__col">
+                                    <CopyNode SiteId="j.S3DestinationId.Value" Name="@(j.S3DestinationName ?? "")" Role="Primary storage" Latest="Latest(j.S3DestinationId.Value)" Site="Site(j.S3DestinationId.Value)" CanRetry="Can(Permissions.JobsRun)" OnRetry="RetryAsync" />
+                                </div>
+                                <div class="copies__arrow"><Icon Name="arrow-right" Size="18" /></div>
+                                <div class="copies__col">
+                                    @foreach (var t in j.ReplicationTargets ?? [])
+                                    {
+                                        <CopyNode SiteId="t.DestinationId" Name="@t.Name" Role="DR site" Latest="Latest(t.DestinationId)" Site="Site(t.DestinationId)" CanRetry="Can(Permissions.JobsRun)" OnRetry="RetryAsync"
+                                                  CopyFrom="NewestPrimaryPoint(j.S3DestinationId.Value)" OnCopyNow="p => CopyNowAsync(p, t.DestinationId, t.Name)" />
+                                    }
+                                    @if (DrCount == 0)
+                                    {
+                                        <div class="topo__node topo__node--off" style="box-shadow:inset 0 0 0 1px var(--line);background:none"><span class="ui-glyph"><Icon Name="plus" Size="15" /></span><span><b>No DR site</b><small>@if (Can(Permissions.JobsWrite)) { <a class="link" href="/jobs/@j.Id/edit?step=4">Add a second site</a> } else { <span>Ask an administrator to add one</span> }</small></span><span></span></div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </ChildContent>
+                </Panel>
+
+                <Panel Title="Recovery points" Icon="recovery-point" Flush="true">
+                    <Actions>@if (Can(Permissions.RestoresExecute)) { <a href="/restores/new?jobId=@j.Id">Restore…</a> }</Actions>
+                    <ChildContent>
+                        @if (_points is null) { <div style="padding:16px 18px"><Skel Height="32px" /></div> }
+                        else if (_points.Count == 0) { <Empty Compact="true" Icon="recovery-point" Title="No recovery points yet" Message="A recovery point appears after a backup is verified and copied." /> }
+                        else
+                        {
+                            <div class="points">
+                                @foreach (var set in _points.Take(8))
+                                {
+                                    var head = set.First();
+                                    <div class="points__row">
+                                        <span class="points__dot"></span>
+                                        <span style="min-width:0">
+                                            <span class="row" style="gap:10px"><span class="strong">@Clock.Format(head.CompletedAt ?? head.CreatedAt)</span><span class="ui-list__sub">@Fmt.Relative(head.CompletedAt ?? head.CreatedAt) · @(head.BytesTotal is null ? head.LegacyTotalSize ?? "" : Fmt.Bytes(head.BytesTotal))</span></span>
+                                            <span class="points__copies">
+                                                @foreach (var c in set.OrderBy(c => c.IsReplica))
+                                                {
+                                                    <span class="ui-badge @(c.VerificationStatus == VerificationStatusDto.Verified ? "ui-badge--flow" : c.VerificationStatus == VerificationStatusDto.Failed ? "ui-badge--bad" : "")" title="@StatusMap.Verification(c.VerificationStatus).Label">
+                                                        <Icon Name="@(c.IsReplica ? "topology" : "s3")" Size="12" />@c.DestinationName@if (c.Encrypted) { <Icon Name="lock" Size="12" /> }
+                                                    </span>
+                                                }
+                                            </span>
+                                        </span>
+                                        <span>@if (Can(Permissions.RestoresExecute)) { <Btn Size="sm" Href="@($"/restores/new?recoveryPointId={set.First(c => !c.IsReplica || set.All(x => x.IsReplica)).Id}")" Icon="restore">Restore</Btn> }</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                    <Footer>@if (_points is { Count: > 8 }) { <span>Showing the 8 newest of @_points.Count. <a class="link" href="/recovery">All recovery points</a></span> } else { <span>Each recovery point lists every site that holds a copy.</span> }</Footer>
+                </Panel>
+
+                <Panel Title="Recent activity" Icon="history" Flush="true">
+                    <Actions><a href="/runs?jobId=@j.Id">Run history</a></Actions>
+                    <ChildContent>
+                        @if (_runs is null) { <div style="padding:16px 18px"><Skel Height="32px" /></div> }
+                        else if (_runs.Count == 0) { <Empty Compact="true" Icon="history" Title="No runs yet" Message="Run a backup now or wait for the schedule." /> }
+                        else
+                        {
+                            <div class="ui-list">
+                                @foreach (var r in _runs)
+                                {
+                                    <a class="ui-list__row cols-runmini" href="/runs/@r.Id">
+                                        <span style="min-width:0"><span class="ui-list__title" style="display:block">@Clock.Format(r.StartedAt ?? r.CreatedAt)</span><span class="ui-list__sub" style="display:block">@StatusMap.Trigger(r.Trigger)@(r.Status == RunStatusDto.Failed ? $" · {StatusMap.Failure(r.FailureClass)}" : "")</span></span>
+                                        <span class="ui-list__meta hide-sm" style="text-align:right">@Fmt.Bytes(r.TotalArtifactBytes)</span>
+                                        <span class="ui-list__meta hide-sm" style="text-align:right">@Fmt.Duration(r.DurationSeconds)</span>
+                                        <StatusBadge View="StatusMap.Run(r.Status)" />
+                                        <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                                    </a>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </Panel>
+            </div>
+
+            <aside class="detail__aside" aria-label="Properties">
+                <div>
+                    <div class="aside-title">Protected system</div>
+                    <dl class="ui-props">
+                        <dt>Server</dt><dd><a href="/servers/@j.ServerId">@j.ServerName</a></dd>
+                        <dt>Engine</dt><dd>@Ui.EngineLabel(j.Category)</dd>
+                        <dt>Backup method</dt><dd>@j.TemplateName</dd>
+                        @foreach (var st in j.Settings ?? [])
+                        {
+                            <dt title="From the app environment">@st.Name</dt><dd class="mono xs" title="From the app environment">@(st.IsSecret ? "•••••••• (env)" : st.Value)</dd>
+                        }
+                    </dl>
+                </div>
+                <div>
+                    <div class="aside-title">Policy</div>
+                    <dl class="ui-props">
+                        <dt>Schedule</dt><dd>@(j.CronExpression is null ? "Manual only" : j.ScheduleDescription)</dd>
+                        <dt>Keeps copies</dt><dd>@Ui.Keep(j.RetentionDays)</dd>
+                        <dt>Always keeps</dt><dd>Newest @j.MinRecoveryPointsToKeep</dd>
+                        <dt>Missed runs</dt><dd>@(j.MissedRunPolicy == MissedRunPolicyDto.Skip ? "Skipped" : "Caught up")</dd>
+                    </dl>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(j.Description)) { <div><div class="aside-title">Notes</div><p class="soft">@j.Description</p></div> }
+                <details class="ui-disclose">
+                    <summary><Icon Name="terminal" Size="14" />Technical details<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                    <div class="ui-disclose__body">
+                        <dl class="ui-props">
+                            <dt>Server address</dt><dd class="mono xs">@j.ServerHost</dd>
+                            @if (j.CronExpression is not null) { <dt>Cron</dt><dd class="mono xs">@j.CronExpression</dd> }
+                            <dt>Time zone</dt><dd>@j.TimeZone</dd>
+                            <dt>Gives up after</dt><dd>@Fmt.Duration(TimeSpan.FromMinutes(j.TimeoutMinutes)) · @Ui.Plural(j.MaxAttempts, "attempt", "attempts")</dd>
+                            <dt>Staging copy</dt><dd>@(j.KeepLocalCopy ? "Kept" : "Removed after upload")</dd>
+                            <dt>Job ID</dt><dd class="mono xs">@j.Id</dd>
+                        </dl>
+                    </div>
+                </details>
+            </aside>
+        </div>
+    </div>
+
+    <Confirm @bind-Open="_confirmRun" Title="Run this backup now?" Icon="play" ConfirmText="Run backup" Busy="_running" OnConfirm="RunNowAsync"
+             Message="@($"Backora connects to {j.ServerName} and runs {j.TemplateName} right away.")" />
+    <Confirm @bind-Open="_confirmDelete" Title="Delete this backup job?" Danger="true" Icon="trash" ConfirmText="Delete job" Busy="_deleting" RequireText="@j.Name" OnConfirm="DeleteAsync"
+             Message="Future backups stop. Copies already stored stay until their retention ends, and you can still restore them." />
+}
+
+@code {
+    [Parameter] public long Id { get; set; }
+    private BackupJobDto? _job;
+    private List<RunSummaryDto>? _runs;
+    private List<OffloadSummaryDto> _copies = [];
+    private List<S3DestinationDto> _sites = [];
+    private List<IGrouping<long, OffloadSummaryDto>>? _points;
+    private string? _error;
+    private bool _running, _confirmDelete, _deleting, _confirmRun;
+
+    private int DrCount => _job?.ReplicationTargets?.Count ?? 0;
+    private OffloadSummaryDto? Latest(long destinationId) => _copies.Where(c => c.DestinationId == destinationId).MaxBy(c => c.CreatedAt);
+    private S3DestinationDto? Site(long id) => _sites.FirstOrDefault(s => s.Id == id);
+    /// <summary>The newest recovery point stored on the job's primary storage (the copy a DR site should hold).</summary>
+    private OffloadSummaryDto? NewestPrimaryPoint(long primaryId) => _copies
+        .Where(c => c.DestinationId == primaryId && !c.IsReplica && c.Status == OffloadStatusDto.Completed && c.RetentionState != RetentionStateDto.Deleted)
+        .MaxBy(c => c.CompletedAt ?? c.CreatedAt);
+
+    private async Task CopyNowAsync(OffloadSummaryDto point, long siteId, string siteName)
+    {
+        var r = await Api.RecoveryPoints.ReplicateAsync(point.Id, siteId);
+        if (Handle(r, $"Copying to {siteName}", $"The newest recovery point ({Fmt.Relative(point.CompletedAt ?? point.CreatedAt)}) is being copied. Progress shows under Transfers.")) await LoadAsync();
+    }
+    private string LatestCopyText(long id) => Latest(id) is { } c ? $"Last copy {StatusMap.Offload(c).Label.ToLowerInvariant()} · {Fmt.Relative(c.CompletedAt ?? c.CreatedAt)}" : "No copy yet";
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var r = await Api.Jobs.GetAsync(Id);
+        _error = r.StatusCode == 404 ? "This backup job doesn't exist or was deleted." : ErrorOf(r);
+        _job = r.Value;
+        if (_job is null) return;
+        var runs = Api.Runs.ListAsync(new RunFilter(JobId: Id), 1, 6, "-createdAt", PageToken);
+        var copies = Can(Permissions.RecoveryPointsRead) ? Api.Offloads.ListAsync(null, Id, 1, 100) : null;
+        var points = Can(Permissions.RecoveryPointsRead) ? Api.RecoveryPoints.ListAsync(new RecoveryPointFilter(JobId: Id), 1, 200, "-createdAt") : null;
+        var sites = Can(Permissions.StorageRead) ? Api.Storage.ListAsync() : null;
+        _runs = (await runs).Value?.Items.ToList() ?? [];
+        if (copies is not null) _copies = (await copies).Value?.Items.ToList() ?? [];
+        if (sites is not null) _sites = (await sites).Value ?? [];
+        if (points is not null)
+        {
+            var list = (await points).Value?.Items.Where(p => p.Status == OffloadStatusDto.Completed).ToList() ?? [];
+            // One recovery point = one backup run; each copy of it lives on a site.
+            _points = list.GroupBy(p => p.BackupRunId ?? -p.Id).OrderByDescending(g => g.Max(p => p.CompletedAt ?? p.CreatedAt)).ToList();
+        }
+        else _points = [];
+    }
+
+    private async Task RetryAsync(OffloadSummaryDto o)
+    {
+        var r = await Api.Offloads.RetryAsync(o.Id);
+        if (Handle(r, $"Retrying the copy to {o.DestinationName}", "Only this site is retried. The backup isn't run again.")) await LoadAsync();
+    }
+
+    private async Task RunNowAsync()
+    {
+        _running = true;
+        var r = await Api.Jobs.RunNowAsync(Id, NewIdempotencyKey());
+        _running = false; _confirmRun = false;
+        if (Handle(r, "Backup started", "Follow its progress on the run page.") && r.Value is not null) Nav.NavigateTo($"/runs/{r.Value.RunId}");
+    }
+
+    private async Task ToggleStatusAsync()
+    {
+        var next = _job!.Status == JobStatusDto.Active ? JobStatusDto.Inactive : JobStatusDto.Active;
+        if (Handle(await Api.Jobs.SetStatusAsync(Id, next), next == JobStatusDto.Active ? "Backups resumed" : "Backups paused")) await LoadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        _deleting = true;
+        var r = await Api.Jobs.DeleteAsync(Id);
+        _deleting = false;
+        if (Handle(r, "Backup job deleted")) { _confirmDelete = false; Nav.NavigateTo("/jobs"); }
+    }
+}

@@ -1,0 +1,6 @@
+@inject UserContext CurrentUser
+<nav class="ui-tabs" aria-label="Users and access">
+    <a href="/users" aria-current="@(Active == "users" ? "page" : null)"><Icon Name="users" Size="14" />Users</a>
+    @if (CurrentUser.Can(Permissions.AuditRead)) { <a href="/audit" aria-current="@(Active == "audit" ? "page" : null)"><Icon Name="audit" Size="14" />Audit log</a> }
+</nav>
+@code { [Parameter] public string Active { get; set; } = "users"; }

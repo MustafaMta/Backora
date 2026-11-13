@@ -1,0 +1,41 @@
+@* Live pipeline for work in progress (backup runs, restores): stages joined by light that travels toward the
+   active stage. Driven only by real status from the API; animation honours prefers-reduced-motion. *@
+<div class="lf @Class" role="list" aria-label="@Label">
+    @for (var i = 0; i < Stages.Count; i++)
+    {
+        var st = Stages[i];
+        if (i > 0)
+        {
+            <div class="lf__link lf__link--@LinkCss(i)" aria-hidden="true"><span class="lf__fill"></span><span class="lf__packet"></span></div>
+        }
+        <div class="lf__stage lf__stage--@Css(st.State)" role="listitem" aria-current="@(st.State == FlowState.Active ? "step" : null)">
+            <span class="lf__node">
+                <Icon Name="@(st.State == FlowState.Done ? "check" : st.State == FlowState.Failed ? "x" : st.Icon)" Size="18" />
+            </span>
+            <span class="lf__label">@st.Label</span>
+            @if (st.Detail is not null) { <span class="lf__detail">@st.Detail</span> }
+            <span class="sr-only">@StateText(st.State)</span>
+        </div>
+    }
+</div>
+
+@code {
+    public enum FlowState { Pending, Active, Done, Failed, Waiting }
+    public sealed record Stage(string Icon, string Label, string? Detail, FlowState State);
+
+    [Parameter, EditorRequired] public IReadOnlyList<Stage> Stages { get; set; } = [];
+    [Parameter] public string Label { get; set; } = "Progress";
+    [Parameter] public string? Class { get; set; }
+
+    private static string Css(FlowState s) => s switch { FlowState.Active => "active", FlowState.Done => "done", FlowState.Failed => "failed", FlowState.Waiting => "waiting", _ => "pending" };
+    private static string StateText(FlowState s) => s switch { FlowState.Active => "in progress", FlowState.Done => "done", FlowState.Failed => "failed", FlowState.Waiting => "waiting for you", _ => "not started" };
+
+    // The link into stage i: lit when stage i is done, flowing when stage i is active, dim otherwise.
+    private string LinkCss(int i) => Stages[i].State switch
+    {
+        FlowState.Done => "done",
+        FlowState.Active or FlowState.Waiting => Stages[i - 1].State == FlowState.Done ? "flowing" : "pending",
+        FlowState.Failed => "failed",
+        _ => Stages[i - 1].State == FlowState.Done ? "ready" : "pending",
+    };
+}

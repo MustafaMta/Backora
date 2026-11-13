@@ -1,0 +1,25 @@
+@* Segmented progress: one bar per step, label underneath. Visited steps can be revisited. *@
+<nav class="ui-psteps" aria-label="@Label">
+    <ol>
+        @for (var i = 0; i < Items.Count; i++)
+        {
+            var n = i + 1; var item = Items[i];
+            var state = n == Current ? "is-current" : n < Current || Done.Contains(n) ? "is-done" : null;
+            <li class="ui-pstep @state" aria-current="@(n == Current ? "step" : null)">
+                <button type="button" disabled="@(n > MaxReachable || n == Current)" @onclick="() => OnSelect.InvokeAsync(n)" aria-label="@($"Step {n} of {Items.Count}: {item.Label}")">
+                    <span class="ui-pstep__bar" aria-hidden="true"></span>
+                    <span class="ui-pstep__meta"><span class="ui-pstep__num">@(state == "is-done" ? "✓" : n.ToString(System.Globalization.CultureInfo.InvariantCulture))</span><span class="ui-pstep__label">@item.Label</span></span>
+                </button>
+            </li>
+        }
+    </ol>
+</nav>
+@code {
+    public sealed record Item(string Label, string? Hint = null);
+    [Parameter] public IReadOnlyList<Item> Items { get; set; } = [];
+    [Parameter] public int Current { get; set; } = 1;
+    [Parameter] public int MaxReachable { get; set; } = 1;
+    [Parameter] public IReadOnlySet<int> Done { get; set; } = new HashSet<int>();
+    [Parameter] public string Label { get; set; } = "Steps";
+    [Parameter] public EventCallback<int> OnSelect { get; set; }
+}

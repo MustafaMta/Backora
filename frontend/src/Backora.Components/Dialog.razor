@@ -1,0 +1,41 @@
+@implements IAsyncDisposable
+@inject BackoraJs Js
+@if (Open)
+{
+    <div class="ui-scrim" @onclick="Backdrop">
+        <div class="ui-dialog @(Large ? "ui-dialog--lg" : null)" role="@(Alert ? "alertdialog" : "dialog")" aria-modal="true" aria-labelledby="@_id" @ref="_el" @onclick:stopPropagation="true" @onkeydown="Key">
+            <div class="ui-dialog__head">
+                @if (Icon is not null) { <span class="ui-glyph ui-glyph--@IconTone" aria-hidden="true"><Icon Name="@Icon" Size="16" /></span> }
+                <h2 id="@_id" class="grow">@Title</h2>
+                @if (!Locked) { <Btn Variant="ghost" Size="sm" IconOnly="true" Icon="x" AriaLabel="Close dialog" OnClick="Close" /> }
+            </div>
+            <div class="ui-dialog__body">@ChildContent</div>
+            @if (Footer is not null) { <div class="ui-dialog__foot">@Footer</div> }
+        </div>
+    </div>
+}
+@code {
+    private readonly string _id = "d" + Guid.NewGuid().ToString("N")[..8];
+    private ElementReference _el; private int _trap; private bool _wasOpen;
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public string IconTone { get; set; } = "accent";
+    [Parameter] public bool Alert { get; set; }
+    [Parameter] public bool Large { get; set; }
+    [Parameter] public bool Locked { get; set; }
+    [Parameter] public string? InitialFocus { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (Open && !_wasOpen) { _wasOpen = true; _trap = await Js.InvokeAsync<int>("trapFocus", _el, InitialFocus); }
+        else if (!Open && _wasOpen) { _wasOpen = false; await Js.InvokeVoidAsync("releaseFocus", _trap); }
+    }
+    private async Task Close() { if (Locked) return; Open = false; await OpenChanged.InvokeAsync(false); await OnClose.InvokeAsync(); }
+    private Task Backdrop() => Alert ? Task.CompletedTask : Close();
+    private Task Key(KeyboardEventArgs e) => e.Key == "Escape" ? Close() : Task.CompletedTask;
+    public async ValueTask DisposeAsync() { if (_wasOpen) await Js.InvokeVoidAsync("releaseFocus", _trap); }
+}

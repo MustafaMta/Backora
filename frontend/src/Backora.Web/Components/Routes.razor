@@ -1,0 +1,9 @@
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Public.NotFound)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.AppShell)">
+            <NotAuthorized><RedirectToLogin /></NotAuthorized>
+            <Authorizing><div class="ui-loading" role="status"><span class="ui-spinner" aria-hidden="true"></span>Checking your session…</div></Authorizing>
+        </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

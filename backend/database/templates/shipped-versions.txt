@@ -1,0 +1,55 @@
+# SHA-256 of every built-in template version Backora has shipped (the .sh file with _common.inc inlined, as stored).
+# At startup the API updates a stored built-in template to the current file only when its script matches one of
+# these, so templates edited by hand are never overwritten. Add the new hash whenever a template changes
+# (BuiltInTemplatesTests fails until you do).
+f08265b13ce1beeeb09b4854b8811f15f4f2d4109fee6c369994dd7f38cff7e8  MariaDB · Logical @ 5951082
+69599c758263328d2c279163cd9fec101c029da1d88623e92c60536af9803121  MariaDB · Physical @ 5951082
+3a0fa25fbcd5166cdd85565d4f85265bbd26f203efc4f64e57b7b03f7161f496  PostgreSQL · Logical @ 5951082
+375b41a22faecfefa5685ae5d93b3413a470c25d72406ade9eacf540228bc92c  PostgreSQL · Physical @ 5951082
+b8fb441e0495792003b225ed1f78dae0a3c644eefb8b7836e702140fdc01b2bc  MariaDB · Logical @ 9e0d725
+7d87a091b33f20a00e4405aaa6029409254a1203fcc8080770de53eb97602162  MariaDB · Physical @ 9e0d725
+5e4df0180559a417ed01184a4257737bd2870513435a37646daa661c06d614ff  PostgreSQL · Logical @ 9e0d725
+8d175dd2ce3e3c367b6cd9209e24cde85d6edf04b209931323c220ba122ee736  PostgreSQL · Physical @ 9e0d725
+b95a87e9a5cf517981921df14718356eb87777c7252545e31a7aead9f44ebadc  MariaDB · Logical @ b33d623
+9078971ce14e0fc110ba21529b9de6efb8c9724c90c60d0da5cfe94f52ae20ec  MariaDB · Physical @ b33d623
+e86373265326ed97a5db5c89e35d0da4cb2dae5a11c6aabae5a14ad201d2572b  PostgreSQL · Logical @ b33d623
+c0db4c71e73c37cc2382dd7b725890d94a3078c4e2e8baf4de50ec148c935bc7  PostgreSQL · Physical @ b33d623
+9695b5bc89cbc4c3ea01f22df9f3a88cfd34f4484935ec703bc9d0bb7d96133f  MariaDB · Logical @ 638dccb
+7b1e2deec83fec9ed9a6b727860d412316cf9f83076e2a2e677846da6f6a6026  MariaDB · Physical @ 638dccb
+30c1058e820718d64961d126a7929b716341cb25cbd61fbfc84fbba1a953af3b  PostgreSQL · Logical @ 638dccb
+c5a7cfc12b12661a604f32b39a814f85b037cce4fd1fbfd141a97d8152325b92  PostgreSQL · Physical @ 638dccb
+ae2e7f55958a56bf5f49cb9313612f64017b0d23a5ba5fe05da44a2e74eec733  MariaDB · Logical @ c3875ec
+cf0a2dd9a759eb3871aec37d9b145f3f9869cdc5108f9b5d66a0dac87eb4a71d  MariaDB · Physical @ c3875ec
+d5528f89e6fca65d59513f32d9c4a8eed7aa8250fe58e529126a0980a60861e6  PostgreSQL · Logical @ c3875ec
+560696859dcfd35ae0043881272431413fbeeb6f23227be04fde93d4137536f1  PostgreSQL · Physical @ c3875ec
+3f78828e5c1de429bb86800bc8d2b8272d5ee32d56894782b003b81ba938b203  MariaDB · Logical @ streaming backups, lock timeouts
+87669a8258756c009643dc51584dcdb64da03b8e98558b497fd4eb4a1335cc2f  MariaDB · Physical @ streaming backups, lock timeouts
+dbcaebd048d79daaae0c009561be1f906780c91efd34d77368f7bdc77b5746f2  PostgreSQL · Logical @ streaming backups, lock timeouts
+df098a045b4468c37920cb1492e86a7b8aaec3af0dad13da9535729569998ea7  PostgreSQL · Physical @ streaming backups, lock timeouts
+5a4bf5871817dc4bf41aa805ac0ba214427f8af8173134021b0bc86e5654d4b2  MariaDB · Logical @ live progress
+401634acf58be0a12fb3e0b063c299633842208859e105f8bcf86fa4548b9c5f  MariaDB · Physical @ live progress
+3b0900c100a4c945dcb61979c92934ff3550ee75514edbc7980e06a1c8e4cbe0  PostgreSQL · Logical @ live progress
+3a301d0dff06ccfe5f704c1ec1b1749724765c9ee2058b6aac8e8d9bdc2ede95  PostgreSQL · Physical @ live progress
+7c34254c5907d585cfa93dfe1c9af43ddd742dfede07d9a5bf3aaf0eac36b706  MariaDB · Physical @ lock-wait progress
+d7328d8a9fa3ffca07808fce6d4358931d5c2e74c70a7d2a566dbd6891653732  MariaDB · Logical @ progress for every step
+f6b556c30e874d36bf5cbba9ab215af24c2d3f2038eb961ae3d7e5a1905b8c00  MariaDB · Physical @ progress for every step
+3c36539f0ec45ebc5b3a2f8a9ce42133390d7d48abcf1c5c37e3146e44828829  PostgreSQL · Logical @ progress for every step
+c94e7853db566aaf91ac3aa4006c657a6badb85fd654f2a622b27d5bdd157b92  PostgreSQL · Physical @ progress for every step
+c02d3a743a9b878168f5fec02e5c0b0698553f2dd4e4062ed8a622a400c556e4  MariaDB · Physical @ blocker named in lock failures
+b42fe3637b3ab9e20ceef1baf7f684748f01cd5d6d7df5f242b0d8abb641cf5a  MariaDB · Logical @ partial output recorded
+c5396eff93776ee5c1a344cb06c69aa19229aee8398ea366e363e6809341c698  MariaDB · Physical @ partial output recorded
+296488fc963a2e58e99ef3bcd80471063973315967b18d3569cd8f3eefbe4d14  PostgreSQL · Logical @ partial output recorded
+c5a61769d29b2a8bd4451bd32d54ef1102358261cabb0c7c75c862985dd66820  PostgreSQL · Physical @ partial output recorded
+57073988892a0459034a89effee27cedbe360d8c2a49e78432067ab2eac865a2  MariaDB · Logical @ compressed into one file on the server, with checksums
+4e3dc098de1bc2540bc342294ea217eddeaa40f47b07a25a096fa9a124313dfb  MariaDB · Physical @ compressed into one file on the server, with checksums
+20c239cdd1ce26866bcf87e06bd6618ff34f8e07e8f0706a67a733e326193fc5  PostgreSQL · Logical @ compressed into one file on the server, with checksums
+6424ec181df97a692c8b3178ea9c059576401a3b2cf8bd2e12e5eaa5171a288c  PostgreSQL · Physical @ compressed into one file on the server, with checksums
+2ed43201f5881fd7f5c3405f694cdc5e15ba17cb5e553a3d45e10cabb692e328  MariaDB · Logical @ compressed into one file by the worker, with checksums
+f9dec173855037fb6e0cdd77d64eb122e60bb5e793791bdc69a1108f79c805e8  MariaDB · Physical @ compressed into one file by the worker, with checksums
+d5f396be732a4d7dabbde3b360c9bbc0cbd55b94ff9550f51287d9bb4890f682  PostgreSQL · Logical @ compressed into one file by the worker, with checksums
+631c8d5239e54fa34048b49dbe200d410d36af668ae407f52677b30116e2a1f3  PostgreSQL · Physical @ compressed into one file by the worker, with checksums
+590b37fb72f5d151dc2cfe02ddd84644eceb5b1828808614cfb3364bfe18e952  PostgreSQL · Physical @ fast checkpoint by default
+1e4442bdef43169b1a855fa44c5622744e93897b4c97bb202987ae7f8302e434  MariaDB · Logical @ outputs recorded for the worker's compression
+6f26be3edbec027a5ab292c38d2d36ac233f61276b0d579e8270b09fe08d81ba  MariaDB · Physical @ outputs recorded for the worker's compression
+81dccc340d91237bb5c73bd63bfad8755b55f80296a9e52f7a0d68e7c6ee022a  PostgreSQL · Logical @ outputs recorded for the worker's compression
+938d05d59681a43e485ebd7c7d60a4d45f574dd63f1b60ff66ebf25e85ea32de  PostgreSQL · Physical @ outputs recorded for the worker's compression

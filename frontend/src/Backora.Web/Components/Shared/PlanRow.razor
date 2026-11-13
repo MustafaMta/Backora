@@ -1,0 +1,15 @@
+<div class="plan__row">
+    <span class="ui-glyph @Glyph"><Icon Name="@Icon" Size="15" /></span>
+    <span style="min-width:0">
+        <span class="plan__label" style="display:block">@Label</span>
+        <span class="plan__value @(Value is null ? "plan__value--empty" : null)" style="display:block">@(Value ?? "Not chosen yet")</span>
+        @if (Sub is not null && Value is not null) { <span class="plan__sub" style="display:block">@Sub</span> }
+    </span>
+</div>
+@code {
+    [Parameter] public string Icon { get; set; } = "circle";
+    [Parameter] public string? Glyph { get; set; }
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public string? Sub { get; set; }
+}

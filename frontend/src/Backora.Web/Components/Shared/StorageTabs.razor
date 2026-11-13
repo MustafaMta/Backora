@@ -1,0 +1,6 @@
+<nav class="ui-tabs" aria-label="Storage">
+    <a href="/storage" aria-current="@(Active == "sites" ? "page" : null)"><Icon Name="s3" Size="14" />Sites</a>
+    <a href="/transfers" aria-current="@(Active == "transfers" ? "page" : null)"><Icon Name="transfer" Size="14" />Transfers</a>
+    <a href="/files" aria-current="@(Active == "files" ? "page" : null)"><Icon Name="folder" Size="14" />Stored files</a>
+</nav>
+@code { [Parameter] public string Active { get; set; } = "sites"; }

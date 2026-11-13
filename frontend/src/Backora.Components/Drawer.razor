@@ -1,0 +1,37 @@
+@implements IAsyncDisposable
+@inject BackoraJs Js
+@* Side panel for medium-sized tasks: header, scrolling body, pinned footer. *@
+@if (Open)
+{
+    <div class="ui-drawer-scrim" @onclick="Close"></div>
+    <aside class="ui-drawer @(Wide ? "ui-drawer--wide" : null)" role="dialog" aria-modal="true" aria-labelledby="@_id" @ref="_el" @onkeydown="Key">
+        <header class="ui-drawer__head">
+            @if (Icon is not null) { <span class="ui-glyph ui-glyph--accent"><Icon Name="@Icon" Size="16" /></span> }
+            <div class="grow"><h2 id="@_id">@Title</h2>@if (Subtitle is not null) { <p>@Subtitle</p> }</div>
+            <Btn Variant="ghost" Size="sm" IconOnly="true" Icon="x" AriaLabel="Close" OnClick="Close" />
+        </header>
+        <div class="ui-drawer__body">@ChildContent</div>
+        @if (Footer is not null) { <footer class="ui-drawer__foot">@Footer</footer> }
+    </aside>
+}
+@code {
+    private readonly string _id = "dr" + Guid.NewGuid().ToString("N")[..8];
+    private ElementReference _el; private int _trap; private bool _wasOpen;
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool Wide { get; set; }
+    [Parameter] public string? InitialFocus { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (Open && !_wasOpen) { _wasOpen = true; _trap = await Js.InvokeAsync<int>("trapFocus", _el, InitialFocus ?? "input, textarea, select"); }
+        else if (!Open && _wasOpen) { _wasOpen = false; await Js.InvokeVoidAsync("releaseFocus", _trap); }
+    }
+    private async Task Close() { Open = false; await OpenChanged.InvokeAsync(false); }
+    private Task Key(KeyboardEventArgs e) => e.Key == "Escape" ? Close() : Task.CompletedTask;
+    public async ValueTask DisposeAsync() { if (_wasOpen) await Js.InvokeVoidAsync("releaseFocus", _trap); }
+}

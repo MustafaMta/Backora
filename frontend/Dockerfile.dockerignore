@@ -1,0 +1,9 @@
+# Applies to frontend/Dockerfile (context = repository root). Allow-list only what the build needs.
+*
+!backend/Directory.Build.props
+!backend/src/Backora.Contracts/**
+!frontend/src/**
+!frontend/wwwroot/**
+**/bin/
+**/obj/
+**/*.user

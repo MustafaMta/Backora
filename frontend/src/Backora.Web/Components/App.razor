@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="robots" content="noindex, nofollow" />
+    <base href="/" />
+    <ResourcePreloader />
+    <script src="@Assets["_content/Backora.DesignSystem/js/theme.js"]"></script>
+    <link rel="icon" href="@Assets["_content/Backora.DesignSystem/icons/favicon.ico"]" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/svg+xml" href="@Assets["_content/Backora.DesignSystem/icons/backora-mark-small.svg"]" />
+    <link rel="icon" type="image/png" href="@Assets["_content/Backora.DesignSystem/icons/favicon-32.png"]" sizes="32x32" />
+    <link rel="icon" type="image/png" href="@Assets["_content/Backora.DesignSystem/icons/icon-192.png"]" sizes="192x192" />
+    <link rel="apple-touch-icon" href="@Assets["_content/Backora.DesignSystem/icons/apple-touch-icon.png"]" />
+    <link rel="manifest" href="_content/Backora.DesignSystem/icons/site.webmanifest" />
+    <link rel="preload" href="_content/Backora.DesignSystem/fonts/geist-latin-wght.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/foundation.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/components.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/shell.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/pages.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/auth.css"]" />
+    <link rel="stylesheet" href="@Assets["_content/Backora.DesignSystem/styles/fx.css"]" />
+    <script src="@Assets["_content/Backora.DesignSystem/js/fx.js"]" defer></script>
+    <script src="@Assets["_content/Backora.DesignSystem/js/auth-scene.js"]" defer></script>
+    <HeadOutlet @rendermode="PageRenderMode" />
+</head>
+<body>
+    <Routes @rendermode="PageRenderMode" />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+</html>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    private IComponentRenderMode? PageRenderMode => HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

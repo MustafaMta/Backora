@@ -1,0 +1,297 @@
+@page "/runs/{Id:long}"
+@implements IAsyncDisposable
+<PageTitle>Backup run · Backora</PageTitle>
+
+@if (_error is not null) { <PageHead Title="Run" BackHref="/runs" BackLabel="History" /><Empty Error="true" Title="We couldn't load this run" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+else if (_d is null) { <PageHead Title="Run" BackHref="/runs" BackLabel="History" /><Loading Text="Loading run…" /> }
+else
+{
+    var s = _d.Summary; var v = StatusMap.Run(s.Status);
+    <PageHead Title="@StatusHeadline(s)" BackHref="@($"/jobs/{s.BackupJobId}")" BackLabel="@s.JobName" Subtitle="@($"{s.JobName} on {s.ServerName} · {Clock.Format(s.StartedAt ?? s.CreatedAt)} · {StatusMap.Trigger(s.Trigger)}")">
+        <Lead><span class="ui-glyph ui-glyph--lg @Ui.EngineGlyph(s.Category)"><Icon Name="@Ui.Engine(s.Category)" Size="22" /></span></Lead>
+        <Suffix><StatusBadge View="v" /></Suffix>
+        <Actions>
+            @if (!StatusMap.IsTerminal(s.Status) && s.Status != RunStatusDto.Cancelling && Can(Permissions.RunsCancel)) { <Btn Icon="stop" OnClick="() => _confirmCancel = true">Cancel run</Btn> }
+            @if (s.Status == RunStatusDto.Failed && s.DismissedAt is null && Can(Permissions.JobsRun)) { <Btn Icon="check" Busy="_clearing" OnClick="ClearAsync">Clear</Btn> }
+            @if (s.Status == RunStatusDto.Failed && Can(Permissions.JobsRun)) { <Btn Variant="primary" Icon="retry" Busy="_retrying" OnClick="() => _confirmRetry = true">Try again</Btn> }
+        </Actions>
+    </PageHead>
+
+    <div class="detail app-page">
+        <div class="detail__main">
+            <div class="lead-figs">
+                <span><Icon Name="timer" Size="14" />Took <strong>@(s.DurationSeconds is null ? (StatusMap.IsTerminal(s.Status) ? "—" : "running…") : Fmt.Duration(s.DurationSeconds))</strong></span>
+                <span><Icon Name="file" Size="14" />Size <strong>@Fmt.Bytes(s.TotalArtifactBytes)</strong></span>
+                <span><Icon Name="verified" Size="14" /><strong>@StatusMap.Verification(s.VerificationStatus).Label</strong></span>
+            </div>
+            @if (s.Status == RunStatusDto.Failed)
+            {
+                <div style="padding:16px var(--gutter) 0"><div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div><strong>@StatusMap.Failure(s.FailureClass).</strong> @StatusMap.FailureHint(s.FailureClass)</div></div></div>
+            }
+            @if (!StatusMap.IsTerminal(s.Status) || Copies.Any(o => !StatusMap.IsTerminal(o.Status)))
+            {
+                <div class="lf-wrap">
+                    <LiveFlow Stages="RunFlow(s, Copies, _d.Progress)" Label="Backup progress" />
+                    @if (s.Status is RunStatusDto.Running or RunStatusDto.Verifying && _d.Progress is not null) { <RunProgress P="_d.Progress" StartedAt="s.StartedAt" /> }
+                </div>
+            }
+            <div class="detail__body">
+                <Panel Title="Copies on each site" Flush="true">
+                    @if (Copies.Count == 0)
+                    {
+                        <p class="muted" style="padding:14px 18px">@(StatusMap.IsTerminal(s.Status) ? "This run wasn't copied off-site." : "Copies start once the backup is verified.")</p>
+                    }
+                    else
+                    {
+                        <div class="ui-list ui-list--inset">
+                            @foreach (var o in Copies.OrderBy(o => o.IsReplica).ThenBy(o => o.DestinationName))
+                            {
+                                <div class="ui-list__row" style="grid-template-columns:22px minmax(0,1fr) auto auto">
+                                    <span class="ui-glyph @(o.IsReplica ? "" : "ui-glyph--accent") @(o.Status is OffloadStatusDto.Running ? "ui-moving" : "")"><Icon Name="@(o.Status is OffloadStatusDto.Running ? "cloud-upload" : o.IsReplica ? "topology" : "s3")" Size="14" /></span>
+                                    <span style="min-width:0">
+                                        <span class="row" style="gap:8px"><span class="ui-list__title">@o.DestinationName</span><span class="ui-list__sub">@(o.IsReplica ? "DR site" : "Primary")@(o.Encrypted ? " · encrypted" : "")</span></span>
+                                        @if (o.Status is OffloadStatusDto.Running or OffloadStatusDto.Verifying or OffloadStatusDto.Pending)
+                                        {
+                                            var pct = o.Status is OffloadStatusDto.Running or OffloadStatusDto.Verifying ? CopyPercent(o) : null;
+                                            <span class="ui-progress @(pct is null ? "ui-progress--indeterminate" : "")" style="margin-top:6px;max-width:360px" role="progressbar" aria-label="@($"Copy to {o.DestinationName}")" aria-valuenow="@(pct?.ToString("0", CultureInfo.InvariantCulture))" aria-valuemin="0" aria-valuemax="100"><span style="width:@(string.Create(CultureInfo.InvariantCulture, $"{pct ?? 35:0.#}%"))"></span></span>
+                                            <span class="copy-line num">@CopyLine(o, pct)</span>
+                                        }
+                                        else if (o.Status == OffloadStatusDto.Failed) { <span class="ui-list__sub t-bad" style="display:block;white-space:normal">@StatusMap.Failure(o.FailureClass)</span> }
+                                    </span>
+                                    <StatusBadge View="StatusMap.Offload(o)" />
+                                    <span>@if (o.Status == OffloadStatusDto.Failed && !o.LegacyPrefix && Can(Permissions.JobsRun)) { <Btn Size="sm" Icon="retry" Busy="@(_retryingCopy == o.Id)" OnClick="() => RetryCopyAsync(o)">Retry this site</Btn> }</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </Panel>
+
+                @if (_d.Timeline.Count > 0)
+                {
+                    <Panel Title="What happened">
+                        <ol class="timeline">
+                            @foreach (var t in _d.Timeline)
+                            {
+                                <li><span class="ui-dot ui-dot--@TimelineTone(t.Tone)"></span><span style="min-width:0"><span class="timeline__title" style="display:block">@t.Title</span>@if (t.Detail is not null) { <span class="timeline__detail" style="display:block">@t.Detail</span> }</span><span class="timeline__at" title="@Clock.Format(t.At, true)">@TimeOf(t.At)</span></li>
+                            }
+                        </ol>
+                    </Panel>
+                }
+
+                <details class="ui-disclose">
+                    <summary><Icon Name="terminal" Size="14" />Technical details<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                    <div class="ui-disclose__body stack">
+                        @if (s.ErrorMessage is not null) { <div><div class="aside-title">Error</div><pre class="ui-code">@s.ErrorMessage</pre></div> }
+                        <dl class="ui-props">
+                            <dt>Run ID</dt><dd class="mono xs">@s.Id</dd>
+                            @if (_d.ExitCode is not null) { <dt>Exit code</dt><dd class="mono xs">@_d.ExitCode</dd> }
+                            @if (_d.ScriptSha256 is not null) { <dt>Script checksum</dt><dd class="mono xs">@Fmt.ShortHash(_d.ScriptSha256, 16)</dd> }
+                            @if (_d.RemoteDirectory is not null) { <dt>Remote folder</dt><dd class="mono xs">@_d.RemoteDirectory</dd> }
+                            @if (_d.CorrelationId is not null) { <dt>Correlation</dt><dd class="mono xs">@_d.CorrelationId</dd> }
+                        </dl>
+                        @if (_d.Artifacts.Count > 0)
+                        {
+                            <div><div class="aside-title">Files (@_d.Artifacts.Count)</div>
+                                <div class="stack-sm">@foreach (var a in _d.Artifacts) { <div class="row xs"><span class="mono truncate grow">@a.RelativePath</span><span class="muted num">@Fmt.Bytes(a.SizeBytes)</span></div> }</div>
+                            </div>
+                        }
+                        @if (_d.LogVisible && !string.IsNullOrWhiteSpace(_d.Log)) { <div><div class="aside-title">Log</div><pre class="ui-code">@_d.Log</pre></div> }
+                    </div>
+                </details>
+            </div>
+        </div>
+        <aside class="detail__aside" aria-label="Properties">
+            <div>
+                <div class="aside-title">Properties</div>
+                <dl class="ui-props">
+                    <dt>Backup</dt><dd><a href="/jobs/@s.BackupJobId">@s.JobName</a></dd>
+                    <dt>Server</dt><dd><a href="/servers/@s.ServerId">@s.ServerName</a></dd>
+                    <dt>Type</dt><dd>@_d.TemplateName</dd>
+                    <dt>Started by</dt><dd>@(s.RequestedBy ?? StatusMap.Trigger(s.Trigger))</dd>
+                    <dt>Started</dt><dd>@Clock.Format(s.StartedAt ?? s.CreatedAt)</dd>
+                    <dt>Finished</dt><dd>@(s.CompletedAt is null ? "—" : Clock.Format(s.CompletedAt))</dd>
+                    <dt>Attempt</dt><dd>@s.Attempt of @s.MaxAttempts</dd>
+                </dl>
+            </div>
+        </aside>
+    </div>
+    <Confirm @bind-Open="_confirmCancel" Title="Cancel this backup?" Icon="stop" Danger="true" ConfirmText="Cancel backup" CancelText="Keep going" OnConfirm="CancelAsync" Message="The run stops and is marked cancelled. Earlier copies aren't affected." />
+    <Confirm @bind-Open="_confirmRetry" Title="Run this backup again?" Icon="retry" ConfirmText="Run again" Busy="_retrying" OnConfirm="RetryRunAsync" Message="A new run starts right away on the same server." />
+}
+
+@code {
+    [Parameter] public long Id { get; set; }
+    private RunDetailDto? _d;
+    private string? _error;
+    private bool _retrying, _confirmCancel, _confirmRetry, _clearing;
+
+    private async Task ClearAsync()
+    {
+        _clearing = true;
+        var r = await Api.Runs.DismissAsync(Id);
+        _clearing = false;
+        if (Handle(r, "Cleared", "This run is out of the history now, kept under Cleared.")) await LoadAsync();
+    }
+    private long? _retryingCopy;
+    private PeriodicTimer? _timer;
+
+    // One row per site: a successful retry replaces the failed attempt it retried.
+    private IReadOnlyList<OffloadSummaryDto> Copies => _d is null ? [] : Ui.LatestPerSite(_d.Offloads);
+    private bool Settled => _d is not null && StatusMap.IsTerminal(_d.Summary.Status) && Copies.All(o => StatusMap.IsTerminal(o.Status));
+
+    protected override async Task OnPageInitializedAsync() { await LoadAsync(); _ = PollAsync(); }
+
+    private async Task PollAsync()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(PageToken))
+            {
+                if (_d is null || Settled) continue;
+                var r = await Api.Runs.GetAsync(Id, PageToken);
+                if (r.Ok && r.Value is not null) { _d = r.Value; await InvokeAsync(StateHasChanged); }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Runs.GetAsync(Id, PageToken);
+        _error = r.StatusCode == 404 ? "This run doesn't exist." : ErrorOf(r);
+        _d = r.Value;
+    }
+
+    // Stages come straight from the run and copy statuses; nothing is estimated.
+    private static IReadOnlyList<LiveFlow.Stage> RunFlow(RunSummaryDto s, IReadOnlyList<OffloadSummaryDto> offs, RunProgressDto? progress)
+    {
+        var step = s.Status switch { RunStatusDto.Pending => 0, RunStatusDto.Starting => 1, RunStatusDto.Running => 2, RunStatusDto.Verifying => 3, RunStatusDto.Cancelling => -1, _ => 4 };
+        LiveFlow.FlowState At(int i) => step == -1 ? LiveFlow.FlowState.Pending : step > i ? LiveFlow.FlowState.Done : step == i ? LiveFlow.FlowState.Active : LiveFlow.FlowState.Pending;
+        var done = offs.Count(o => o.Status == OffloadStatusDto.Completed);
+        var copies = offs.Count == 0 ? (step >= 4 ? LiveFlow.FlowState.Done : LiveFlow.FlowState.Pending)
+            : offs.Any(o => o.Status is OffloadStatusDto.Running or OffloadStatusDto.Verifying) ? LiveFlow.FlowState.Active
+            : offs.Any(o => o.Status == OffloadStatusDto.Failed) && offs.All(o => StatusMap.IsTerminal(o.Status)) ? LiveFlow.FlowState.Failed
+            : done == offs.Count ? LiveFlow.FlowState.Done
+            : step >= 4 ? LiveFlow.FlowState.Active : LiveFlow.FlowState.Pending;
+        return
+        [
+            new("clock", "Queued", s.Status == RunStatusDto.Pending ? "Waiting for a worker" : "Picked up", step == 0 ? LiveFlow.FlowState.Active : step == -1 ? LiveFlow.FlowState.Done : LiveFlow.FlowState.Done),
+            new("ssh", "Connect", s.ServerName, At(1)),
+            new(Ui.Engine(s.Category), "Back up", step > 2 && s.TotalArtifactBytes > 0 ? Fmt.Bytes(s.TotalArtifactBytes) : BackUpDetail(progress), At(2)),
+            new("verified", "Verify", VerifyDetail(s, progress), At(3)),
+            new("cloud-upload", "Copy to sites", offs.Count == 0 ? "After verification" : CopyStageDetail(offs, done), copies),
+        ];
+    }
+
+    // The worker's compression computes the checksums in the same pass, so both show their progress under Verify.
+    private static string VerifyDetail(RunSummaryDto s, RunProgressDto? p) => s.Status != RunStatusDto.Verifying ? "Checksums" : p switch
+    {
+        { Stage: "compress", Percent: { } cp } => string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(cp):0}% · compress + checksums"),
+        { Stage: "compress" } => "Compressing + checksums",
+        { Stage: "verify", Percent: { } vp } => string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(vp):0}% · checksums"),
+        _ => "Checksums",
+    };
+
+    private static string BackUpDetail(RunProgressDto? p) => p switch
+    {
+        null => "Running the script",
+        { Stage: "verify" or "compress" } => "Script finished",
+        { Stage: "pre-command" } => "Pre-backup command",
+        { Stage: "checkpoint" } => "Preparing",
+        { Stage: "lock-wait" } => "Waiting for the lock",
+        { Stage: "finishing" } => "Finishing",
+        { Percent: { } pct } => string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(pct):0}% · {Fmt.Bytes(p.Bytes)}"),
+        _ => $"{Fmt.Bytes(p.Bytes)} written",
+    };
+
+    private static string CopyStageDetail(IReadOnlyList<OffloadSummaryDto> offs, int done)
+    {
+        var active = offs.FirstOrDefault(o => o.Status is OffloadStatusDto.Running or OffloadStatusDto.Verifying && CopyPercent(o) is not null);
+        return active is not null && CopyPercent(active) is { } pct
+            ? string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(pct):0}% · {done} of {offs.Count} stored")
+            : $"{done} of {offs.Count} stored";
+    }
+
+    private static double? CopyPercent(OffloadSummaryDto o)
+    {
+        if (o.ProgressStage is not null)
+            return o.ProgressTotalBytes is > 0 && o.ProgressBytes is { } pb ? Math.Min(99.9, 100.0 * pb / o.ProgressTotalBytes.Value) : null;
+        return o.BytesTotal is > 0 && o.BytesTransferred is { } done ? Math.Min(99.9, 100.0 * done / o.BytesTotal.Value) : o.ProgressPercent;
+    }
+
+    // One line per copy in progress, from the copy's current step: what it is doing, how far, how fast, how long.
+    private static string CopyLine(OffloadSummaryDto o, double? pct)
+    {
+        if (o.Status == OffloadStatusDto.Pending) return "Waiting to start";
+        var stage = o.ProgressStage ?? (o.Status == OffloadStatusDto.Verifying ? "check" : (o.BytesTransferred ?? 0) > 0 ? "upload" : null);
+        var label = stage switch
+        {
+            "compress" => "Compressing on the worker",
+            "encrypt" => "Encrypting",
+            "prepare" => "Preparing the upload (checksum)",
+            "upload" => o.IsReplica ? "Copying" : "Uploading",
+            "inspect" => "Checking the ciphertext",
+            "check" => "Verifying checksums against storage",
+            _ => o.Encrypted ? "Encrypting before upload" : o.IsReplica ? "Starting the copy between sites" : "Starting the upload",
+        };
+        var done = o.ProgressBytes ?? (stage == "upload" ? o.BytesTransferred : null);
+        var total = o.ProgressTotalBytes ?? (stage is "upload" or "encrypt" or "compress" ? o.BytesTotal : null);
+        if (done is not { } d || stage is null) return label;
+        var parts = new List<string> { label };
+        if (pct is { } x) parts.Add(string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(x):0}%"));
+        if (d > 0 || total is > 0) parts.Add(total is > 0 ? $"{Fmt.Bytes(d)} of {Fmt.Bytes(total)}" : $"{Fmt.Bytes(d)}");
+        var since = o.ProgressStageStartedAt ?? o.StartedAt;
+        if (since is { } st && DateTimeOffset.UtcNow - st is { TotalSeconds: > 5 } elapsed && d > 0)
+        {
+            var bps = d / elapsed.TotalSeconds;
+            parts.Add(bps * 60 >= 1L << 30 ? $"{Fmt.Bytes((long)(bps * 60))}/min" : $"{Fmt.Bytes((long)bps)}/s");
+            if (total is { } t && t > d && bps > 0) parts.Add($"about {Left((t - d) / bps)} left");
+        }
+        return string.Join(" · ", parts);
+    }
+
+    private static string Left(double seconds)
+    {
+        if (seconds <= 60) return "a minute";
+        if (seconds <= 3600) return $"{Math.Ceiling(seconds / 60):0} min";
+        return $"{(int)(seconds / 3600)} h {Math.Ceiling(seconds % 3600 / 60):0} min";
+    }
+
+    private static string StatusHeadline(RunSummaryDto s) => s.Status switch
+    {
+        RunStatusDto.Completed => "Backup completed",
+        RunStatusDto.Failed => "Backup failed",
+        RunStatusDto.Cancelled => "Backup cancelled",
+        RunStatusDto.Cancelling => "Cancelling backup",
+        RunStatusDto.Pending => "Waiting to start",
+        _ => "Backup in progress",
+    };
+    private static string TimelineTone(string tone) => tone switch { "success" => "ok", "danger" => "bad", "warning" => "warn", "running" => "info", _ => "muted" };
+    private string TimeOf(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, Clock.Zone).ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+
+    private async Task RetryRunAsync()
+    {
+        _retrying = true;
+        var r = await Api.Runs.RetryAsync(Id);
+        _retrying = false; _confirmRetry = false;
+        if (Handle(r, "Backup started again") && r.Value is not null) Nav.NavigateTo($"/runs/{r.Value.RunId}");
+    }
+
+    private async Task RetryCopyAsync(OffloadSummaryDto o)
+    {
+        _retryingCopy = o.Id;
+        var r = await Api.Offloads.RetryAsync(o.Id);
+        _retryingCopy = null;
+        if (Handle(r, $"Retrying copy to {o.DestinationName}", "Only this site is retried. The backup isn't run again.")) await LoadAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        var r = await Api.Runs.CancelAsync(Id);
+        _confirmCancel = false;
+        if (Handle(r, "Cancelling backup")) await LoadAsync();
+    }
+
+    public ValueTask DisposeAsync() { _timer?.Dispose(); Dispose(); return ValueTask.CompletedTask; }
+}

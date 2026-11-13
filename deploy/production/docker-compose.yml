@@ -1,0 +1,132 @@
+# Backora V2 — production deployment (Docker Compose).
+#   ./generate-config.sh backora.example.com admin@example.com    # once: .env + env/{api,frontend,migrator}.env
+#   cp /path/to/execution_host_ed25519 secrets/execution_host_key && chmod 600 secrets/execution_host_key
+#   docker compose up -d --build
+# The .NET services take ALL their settings and credentials from environment variables (env/*.env here; env vars and
+# Secrets on OpenShift). Nothing sensitive is in appsettings or the images. .env only feeds PostgreSQL and the proxy.
+# Public entry point: the Caddy proxy on 80/443 (TLS). PostgreSQL, the API and the frontend are never published.
+name: ${BACKORA_PROJECT:-backora}
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  # Bundled PostgreSQL (optional): only with `--profile local-db`. Production uses the external server set in
+  # the appsettings.Production.json connection strings.
+  postgres:
+    profiles: [local-db]
+    image: postgres:18-alpine
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      BACKORA_OWNER_PASSWORD: ${BACKORA_OWNER_PASSWORD}
+      BACKORA_APP_PASSWORD: ${BACKORA_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ../../backend/database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d backora"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+    networks: [data]
+
+  migrator:
+    build: { context: ../../backend, target: migrator }
+    image: ${BACKORA_REGISTRY:-backora}/backora-migrator:${BACKORA_VERSION:-2.0.0}
+    env_file: [./env/migrator.env]
+    command: ["migrate"]
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+    restart: "no"
+    logging: *logging
+    networks: [data, egress]   # egress: reaches the external PostgreSQL server
+
+  api:
+    build: { context: ../../backend, target: api }
+    image: ${BACKORA_REGISTRY:-backora}/backora-api:${BACKORA_VERSION:-2.0.0}
+    restart: unless-stopped
+    <<: *hardening
+    env_file: [./env/api.env]   # all API settings and credentials (OpenShift: env vars + Secret)
+    volumes:
+      - api-keys:/data/keys
+    # The execution host's SSH private key is a read-only secret file: never stored in PostgreSQL or sent to the UI.
+    secrets:
+      - source: execution_host_key
+        target: execution_host_key
+    depends_on:
+      migrator: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1G }
+    stop_grace_period: 60s
+    logging: *logging
+    networks: [data, app, egress]   # egress: external PostgreSQL, SSH to the execution host, HTTPS to S3 storage
+
+  frontend:
+    build: { context: ../.., dockerfile: frontend/Dockerfile }
+    image: ${BACKORA_REGISTRY:-backora}/backora-frontend:${BACKORA_VERSION:-2.0.0}
+    restart: unless-stopped
+    <<: *hardening
+    env_file: [./env/frontend.env]   # cookies Secure; TLS at the proxy
+    volumes:
+      - frontend-keys:/data/keys
+    depends_on:
+      api: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+    logging: *logging
+    networks: [app]
+
+  proxy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      - "${BACKORA_HTTP_PORT:-80}:80"
+      - "${BACKORA_HTTPS_PORT:-443}:443"
+      - "${BACKORA_HTTPS_PORT:-443}:443/udp"
+    environment:
+      BACKORA_DOMAIN: ${BACKORA_DOMAIN}
+      BACKORA_TLS_MODE: ${BACKORA_TLS_MODE:-acme}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend: { condition: service_healthy }
+    logging: *logging
+    networks: [app, egress]
+
+secrets:
+  execution_host_key:
+    file: ${BACKORA_EXECUTION_HOST_KEY_FILE:-./secrets/execution_host_key}
+
+volumes:
+  pgdata:
+  api-keys:
+  frontend-keys:
+  caddy-data:
+  caddy-config:
+
+networks:
+  data: { internal: true }   # PostgreSQL: no route outside the stack
+  app: { internal: true }    # API <-> frontend <-> proxy
+  egress: {}                 # outbound only where needed (API to execution host/S3; proxy for ACME + clients)

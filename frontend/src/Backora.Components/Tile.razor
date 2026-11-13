@@ -1,0 +1,22 @@
+@* Compact selectable tile for small sets of choices (engine, provider, method, frequency). *@
+<button type="button" class="ui-tile @Class" role="@(Multi ? "checkbox" : "radio")" aria-checked="@(Selected ? "true" : "false")" disabled="@Disabled" title="@Tooltip" @onclick="() => OnSelect.InvokeAsync()">
+    <span class="ui-tile__icon @GlyphClass"><Icon Name="@Icon" Size="18" /></span>
+    <span class="ui-tile__text">
+        <span class="ui-tile__title"><span>@Title</span>@if (Tag is not null) { <span class="ui-tile__tag">@Tag</span> }</span>
+        @if (Subtitle is not null) { <span class="ui-tile__sub">@Subtitle</span> }
+    </span>
+    <span class="ui-tile__check" aria-hidden="true"><Icon Name="check" Size="11" /></span>
+</button>
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string Icon { get; set; } = "circle";
+    [Parameter] public string? GlyphClass { get; set; }
+    [Parameter] public string? Tag { get; set; }
+    [Parameter] public string? Tooltip { get; set; }
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public bool Multi { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public EventCallback OnSelect { get; set; }
+}

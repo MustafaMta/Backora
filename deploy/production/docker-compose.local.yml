@@ -1,0 +1,9 @@
+# Local-only override (this Mac): lets the API reach the lab S3 service (lab-s3:7070) on the existing
+# 'backora_lab' Docker network, which the carried-over storage sites point at. Not used on real servers.
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  api:
+    networks: [data, app, egress, backora_lab]
+networks:
+  backora_lab:
+    external: true

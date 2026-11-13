@@ -1,0 +1,131 @@
+@page "/users/{Id:long}"
+<PageTitle>@(IsNew ? "Invite user" : _u?.Name ?? "User") · Backora</PageTitle>
+
+<PageHead Title="@(IsNew ? "Invite user" : _u?.Name ?? "User")" BackHref="/users" BackLabel="Users &amp; access" Subtitle="@(_u is null ? null : $"{_u.Email} · last sign-in {(_u.LastLoginAt is null ? "never" : Fmt.Relative(_u.LastLoginAt))} · two-step verification {(_u.TwoFactorEnabled ? "on" : "off")}")">
+    <Lead>@if (_u is not null) { <span class="ui-avatar ui-avatar--lg">@Fmt.Initials(_u.Name)</span> }</Lead>
+    <Suffix>@if (_u is not null) { <StatusBadge View="Users.State(_u)" /> }</Suffix>
+    <Actions>
+        @if (!IsNew && _u is not null && Can(Permissions.UsersManage))
+        {
+            <Dropdown AriaLabel="More actions" ButtonClass="ui-btn ui-btn--ghost ui-btn--icon">
+                <Trigger><Icon Name="more" Size="16" /></Trigger>
+                <ChildContent>
+                    <button type="button" class="ui-menu__item" @onclick="() => _pwOpen = true"><Icon Name="key" Size="15" />Set a new password…</button>
+                    @if (_u.LockedOutUntil is { } l && l > DateTimeOffset.UtcNow) { <button type="button" class="ui-menu__item" @onclick="UnlockAsync"><Icon Name="unlock" Size="15" />Unlock account</button> }
+                </ChildContent>
+            </Dropdown>
+        }
+        @if (Can(Permissions.UsersManage)) { <Btn Variant="primary" Icon="check" Busy="_saving" OnClick="SaveAsync">@(IsNew ? "Create user" : "Save changes")</Btn> }
+    </Actions>
+</PageHead>
+
+@if (_loadError is not null) { <Empty Error="true" Title="We couldn't load this user" Message="@_loadError" /> }
+else if (_roles is null || (!IsNew && _u is null)) { <Loading Text="Loading…" /> }
+else
+{
+    var ro = !Can(Permissions.UsersManage);
+    <div class="page page--narrow app-page">
+        @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+        <div>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Person</h2></div>
+                <div class="doc-section__body">
+                    <FormField Label="Name" For="uname" Error="@Err("Name")"><input id="uname" class="ui-input" @bind="_m.Name" disabled="@ro" /></FormField>
+                    @if (IsNew)
+                    {
+                        <FormField Label="Email" For="uemail" Error="@Err("Email")"><input id="uemail" class="ui-input" type="email" autocomplete="off" @bind="_m.Email" /></FormField>
+                        <FormField Label="Temporary password" For="upw" Hint="They must change it when they first sign in." Error="@Err("Password")"><input id="upw" class="ui-input" type="password" autocomplete="new-password" @bind="_m.Password" /></FormField>
+                    }
+                </div>
+            </section>
+            <section class="doc-section">
+                <div class="doc-section__intro"><h2>Access</h2><p>What they can see and do.</p></div>
+                <div class="doc-section__body">
+                    <div class="ui-choices" role="group" aria-label="Roles">
+                        @foreach (var r in _roles)
+                        {
+                            <Choice Multi="true" Title="@r.DisplayName" Subtitle="@r.Description" Icon="@RoleIcon(r.Name)" Selected="_m.Roles.Contains(r.Name)" Disabled="ro" OnSelect="() => ToggleRole(r.Name)" />
+                        }
+                    </div>
+                    @if (Err("Roles") is { } re) { <span class="ui-error">@re</span> }
+                </div>
+            </section>
+            @if (!IsNew)
+            {
+                <section class="doc-section">
+                    <div class="doc-section__intro"><h2>Status</h2></div>
+                    <div class="doc-section__body"><Switch Id="uactive" Value="_m.IsActive" ValueChanged="v => _m.IsActive = v" Disabled="ro" Label="Can sign in" Description="Turn off to block sign-in without deleting history." /></div>
+                </section>
+            }
+        </div>
+    </div>
+
+    <Dialog @bind-Open="_pwOpen" Title="Set a new password" Icon="key">
+        <ChildContent>
+            <div class="stack">
+                <FormField Label="New password" For="npw" Error="@_pwResult?.FieldError("NewPassword")"><input id="npw" class="ui-input" type="password" autocomplete="new-password" @bind="_newPassword" /></FormField>
+                <Switch Id="npwchange" Value="_requireChange" ValueChanged="v => _requireChange = v" Label="Ask them to change it at next sign-in" />
+            </div>
+        </ChildContent>
+        <Footer><Btn OnClick="() => _pwOpen = false">Cancel</Btn><Btn Variant="primary" Busy="_pwSaving" Disabled="@string.IsNullOrEmpty(_newPassword)" OnClick="SetPasswordAsync">Set password</Btn></Footer>
+    </Dialog>
+}
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    private bool IsNew => Id is null;
+    private UserDto? _u;
+    private List<RoleDto>? _roles;
+    private readonly Model _m = new();
+    private string? _loadError, _generalError, _newPassword;
+    private ApiResult? _last, _pwResult;
+    private bool _saving, _pwOpen, _pwSaving, _requireChange = true;
+
+    private static string RoleIcon(string role) => role switch
+    {
+        Roles.PlatformAdministrator => "shield", Roles.BackupAdministrator => "jobs", Roles.BackupOperator => "play",
+        Roles.RestoreOperator => "restore", Roles.Auditor => "audit", _ => "eye",
+    };
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        var roles = await Api.Users.RolesAsync();
+        _loadError = ErrorOf(roles); _roles = roles.Value;
+        if (!IsNew) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Users.GetAsync(Id!.Value);
+        _loadError = ErrorOf(r); _u = r.Value;
+        if (_u is not null) { _m.Name = _u.Name; _m.Roles = _u.Roles.ToHashSet(StringComparer.Ordinal); _m.IsActive = _u.IsActive; }
+    }
+
+    private void ToggleRole(string r) { if (!_m.Roles.Remove(r)) _m.Roles.Add(r); }
+    private string? Err(string f) => _last?.FieldError(f);
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        ApiResult result; long? id = Id;
+        if (IsNew) { var r = await Api.Users.CreateAsync(new CreateUserRequest(_m.Email.Trim(), _m.Name.Trim(), _m.Password, _m.Roles.ToList())); result = r; id = r.Value?.Id; }
+        else result = await Api.Users.UpdateAsync(Id!.Value, new UpdateUserRequest(_m.Name.Trim(), _m.Roles.ToList(), _m.IsActive));
+        _saving = false; _last = result;
+        if (result.Ok) { _m.Password = ""; Toasts.Success(IsNew ? "User created" : "Changes saved", _m.Name); if (IsNew) Nav.NavigateTo($"/users/{id}"); else await LoadAsync(); return; }
+        if (result.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = result.Message; return; }
+        Handle(result);
+    }
+
+    private async Task SetPasswordAsync()
+    {
+        _pwSaving = true;
+        _pwResult = await Api.Users.SetPasswordAsync(Id!.Value, new SetUserPasswordRequest(_newPassword ?? "", _requireChange));
+        _pwSaving = false;
+        if (_pwResult.Ok) { _newPassword = null; _pwOpen = false; Toasts.Success("Password set", _u?.Name); }
+        else if (_pwResult.Outcome != ApiOutcome.ValidationFailed) Handle(_pwResult);
+    }
+
+    private async Task UnlockAsync() { if (Handle(await Api.Users.UnlockAsync(Id!.Value), "Account unlocked", _u?.Name)) await LoadAsync(); }
+
+    private sealed class Model { public string Name { get; set; } = ""; public string Email { get; set; } = ""; public string Password { get; set; } = ""; public HashSet<string> Roles { get; set; } = new(StringComparer.Ordinal); public bool IsActive { get; set; } = true; }
+}

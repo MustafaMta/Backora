@@ -1,0 +1,19 @@
+<div class="pager">
+    <span>@Ui.Plural(Total, One, Many)</span>
+    @if (Total > PageSize)
+    {
+        <span class="row">
+            <span class="num">@(((Page - 1) * PageSize) + 1)–@Math.Min(Page * PageSize, Total)</span>
+            <Btn Size="sm" Variant="ghost" IconOnly="true" Icon="chevron-left" AriaLabel="Previous page" Disabled="@(Page == 1)" OnClick="() => OnChange.InvokeAsync(Page - 1)" />
+            <Btn Size="sm" Variant="ghost" IconOnly="true" Icon="chevron-right" AriaLabel="Next page" Disabled="@(Page * PageSize >= Total)" OnClick="() => OnChange.InvokeAsync(Page + 1)" />
+        </span>
+    }
+</div>
+@code {
+    [Parameter] public int Page { get; set; } = 1;
+    [Parameter] public int PageSize { get; set; } = 25;
+    [Parameter] public long Total { get; set; }
+    [Parameter] public string One { get; set; } = "item";
+    [Parameter] public string Many { get; set; } = "items";
+    [Parameter] public EventCallback<int> OnChange { get; set; }
+}

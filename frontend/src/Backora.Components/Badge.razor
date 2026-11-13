@@ -1,0 +1,9 @@
+@* Status badge. Tone: ok | warn | bad | info | muted | accent. *@
+<span class="ui-badge ui-badge--@Tone @(Plain ? "ui-badge--plain" : null)" title="@Title">@if (Icon is not null) { <Icon Name="@Icon" Size="12" /> }@Text</span>
+@code {
+    [Parameter, EditorRequired] public string Text { get; set; } = "";
+    [Parameter] public string Tone { get; set; } = "muted";
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public bool Plain { get; set; }
+    [Parameter] public string? Title { get; set; }
+}

@@ -1,0 +1,146 @@
+@page "/templates/new"
+@page "/templates/{Id:long}"
+<PageTitle>@(IsNew ? "New template" : _t?.Name ?? "Template") · Backora</PageTitle>
+
+<PageHead Title="@(IsNew ? "New backup method" : _t?.Name ?? "Template")" BackHref="/templates" BackLabel="Templates">
+    <Lead>@if (!IsNew) { <span class="ui-glyph ui-glyph--lg @Ui.EngineGlyph(_m.Category)"><Icon Name="@Ui.Engine(_m.Category)" Size="22" /></span> }</Lead>
+    <Actions>
+        @if (!IsNew && _t is not null && Can(Permissions.TemplatesWrite))
+        {
+            <Dropdown AriaLabel="More actions" ButtonClass="ui-btn ui-btn--icon">
+                <Trigger><Icon Name="more" Size="16" /></Trigger>
+                <ChildContent><button type="button" class="ui-menu__item ui-menu__item--danger" @onclick="() => _confirmDelete = true"><Icon Name="trash" Size="15" />Delete template…</button></ChildContent>
+            </Dropdown>
+        }
+    </Actions>
+</PageHead>
+
+@if (_loadError is not null) { <div class="app-page"><Empty Error="true" Title="We couldn't load this template" Message="@_loadError" /></div> }
+else if (!IsNew && _t is null) { <Loading Text="Loading template…" /> }
+else
+{
+    var ro = !Can(Permissions.TemplatesWrite);
+    <div class="app-page create">
+        <div class="create__main">
+            <section class="create-card" aria-labelledby="tp-title">
+                <div class="create-card__head">
+                    <div class="create-card__eyebrow">Template</div>
+                    <h2 id="tp-title" class="create-card__title">@(IsNew ? "Describe how a backup is taken" : "Backup method")</h2>
+                    <p class="create-card__lead">A template is the script a backup job runs on the server. Jobs pick it as their backup method.</p>
+                </div>
+                <div class="create-card__body">
+                    @if (_generalError is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+                    @if (_t is { JobCount: > 0 }) { <div class="ui-callout ui-callout--info"><Icon Name="info" Size="15" /><div>@Ui.Plural(_t.JobCount, "job uses", "jobs use") this template. Changes apply from their next run (revision @_t.Revision).</div></div> }
+                    <div class="cs">
+                        <div class="ui-form-grid">
+                            <FormField Label="Name" For="tname" Error="@Err("Name")" Hint="Shown when choosing a backup method."><input id="tname" class="ui-input" @bind="_m.Name" disabled="@ro" maxlength="120" placeholder="pg_dumpall" /></FormField>
+                            <FormField Label="Description" For="tdesc" Optional="true" Error="@Err("Description")"><input id="tdesc" class="ui-input" @bind="_m.Description" disabled="@ro" maxlength="500" placeholder="Logical dump of every database" /></FormField>
+                        </div>
+                    </div>
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Kind</h3><span class="cs__hint">Groups templates and picks the icon</span></div>
+                        <div class="ui-tiles ui-tiles--3" role="radiogroup" aria-label="Kind">
+                            <Tile Title="PostgreSQL" Icon="postgresql" GlyphClass="ui-glyph--pg" Selected="@(Ui.Engine(_m.Category) == "postgresql")" Disabled="ro" OnSelect='() => _m.Category = "PostgreSQL"' />
+                            <Tile Title="MariaDB / MySQL" Icon="mariadb" GlyphClass="ui-glyph--maria" Selected="@(Ui.Engine(_m.Category) == "mariadb")" Disabled="ro" OnSelect='() => _m.Category = "MariaDB"' />
+                            <Tile Title="Files" Icon="folder" Selected="@(Ui.Engine(_m.Category) == "folder")" Disabled="ro" OnSelect='() => _m.Category = "Files"' />
+                        </div>
+                        <details class="ui-disclose" style="margin:0;padding:0;background:none;border:0">
+                            <summary style="height:30px"><Icon Name="edit" Size="13" />Use a different kind<Icon Name="chevron-down" Size="13" Class="chev" /></summary>
+                            <div class="ui-disclose__body"><input class="ui-input" style="max-width:260px" list="tcats" aria-label="Kind" @bind="_m.Category" disabled="@ro" maxlength="60" /><datalist id="tcats">@foreach (var c in _categories) { <option value="@c"></option> }</datalist></div>
+                        </details>
+                        @if (Err("Category") is { } ce) { <span class="ui-error"><Icon Name="alert" Size="12" />@ce</span> }
+                    </div>
+                    <div class="cs">
+                        <div class="cs__head"><h3 class="cs__title">Script</h3><span class="cs__hint">Runs on the server over SSH</span></div>
+                        <div class="codepanel">
+                            <div class="codepanel__bar"><span class="dots"><i></i><i></i><i></i></span><span class="mono">backup.sh</span><span class="right">@Lines lines</span></div>
+                            <textarea id="tscript" aria-label="Script" spellcheck="false" @bind="_m.Script" @bind:event="oninput" disabled="@ro"></textarea>
+                        </div>
+                        @if (Err("Script") is { } se) { <span class="ui-error"><Icon Name="alert" Size="12" />@se</span> }
+                        @if (_t is not null && _t.UnknownPlaceholders.Count > 0)
+                        {
+                            <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div>No variable exists for <span class="mono">@string.Join(", ", _t.UnknownPlaceholders)</span>. Runs will fail until you add it under <a href="/variables">Variables</a>.</div></div>
+                        }
+                    </div>
+                </div>
+                @if (!ro)
+                {
+                    <div class="create-card__foot">
+                        <Btn Variant="ghost" Href="/templates">Cancel</Btn>
+                        <span class="grow"></span>
+                        <Btn Variant="primary" Icon="check" Busy="_saving" Disabled="@(string.IsNullOrWhiteSpace(_m.Name) || string.IsNullOrWhiteSpace(_m.Category) || string.IsNullOrWhiteSpace(_m.Script))" OnClick="SaveAsync">@(IsNew ? "Create template" : "Save changes")</Btn>
+                    </div>
+                }
+            </section>
+        </div>
+        <aside class="create__aside">
+            <div class="plan">
+                <div class="plan__head"><Icon Name="variable" Size="15" Class="t-accent" /><h3>Placeholders</h3></div>
+                <div style="padding:14px 18px" class="stack-sm">
+                    <p class="xs muted">Write <span class="mono">{{NAME}}</span> in the script. Backora fills it in from Variables when the job runs; secrets stay masked.</p>
+                    @if (_t is { Placeholders.Count: > 0 }) { <span class="plan__label">Used in this script</span><div class="chipline">@foreach (var p in _t.Placeholders) { <span class="ui-badge ui-badge--accent">@p</span> }</div> }
+                    <span class="plan__label">Available variables</span>
+                    @if (_vars.Count == 0) { <p class="xs muted">None yet. <a class="link" href="/variables">Add a variable</a></p> }
+                    else { <div class="chipline">@foreach (var v in _vars) { <span class="ui-badge" title="@(v.IsSecret ? "Secret" : v.Description)">@if (v.IsSecret) { <Icon Name="lock" Size="11" /> }@v.Name</span> }</div> }
+                </div>
+                <div class="plan__foot"><Icon Name="shield-check" Size="14" /><span>Scripts run with the SSH user's permissions. Keep them read-only on production data.</span></div>
+            </div>
+        </aside>
+    </div>
+    <Confirm @bind-Open="_confirmDelete" Title="Delete this template?" Danger="true" Icon="trash" ConfirmText="Delete template" Busy="_deleting" RequireText="@_t?.Name" OnConfirm="DeleteAsync" Message="Templates used by a backup job can't be deleted." />
+}
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    private bool IsNew => Id is null;
+    private TemplateDto? _t;
+    private List<string> _categories = [];
+    private List<VariableDto> _vars = [];
+    private readonly Model _m = new();
+    private string? _loadError, _generalError;
+    private ApiResult? _last;
+    private bool _saving, _deleting, _confirmDelete;
+    private int Lines => string.IsNullOrEmpty(_m.Script) ? 0 : _m.Script.Split('\n').Length;
+
+    protected override async Task OnPageInitializedAsync()
+    {
+        var cats = Api.Templates.CategoriesAsync(); var vars = Api.Variables.ListAsync();
+        _categories = (await cats).Value ?? []; _vars = (await vars).Value?.OrderBy(v => v.Name).ToList() ?? [];
+        if (IsNew) { _m.Category = "PostgreSQL"; _m.Script = "#!/bin/sh\nset -eu\n\n# Write backup files into the folder Backora provides.\n"; return; }
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Templates.GetAsync(Id!.Value);
+        _loadError = ErrorOf(r); _t = r.Value;
+        if (_t is not null) { _m.Name = _t.Name; _m.Category = _t.Category; _m.Description = _t.Description; _m.Script = _t.Script; _m.Version = _t.Version; }
+    }
+
+    private string? Err(string f) => _last?.FieldError(f);
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        var req = new TemplateUpsertRequest(_m.Name.Trim(), _m.Category.Trim(), _m.Script, string.IsNullOrWhiteSpace(_m.Description) ? null : _m.Description.Trim(), _m.Version);
+        ApiResult result; long? id = Id;
+        if (IsNew) { var r = await Api.Templates.CreateAsync(req); result = r; id = r.Value?.Id; } else result = await Api.Templates.UpdateAsync(Id!.Value, req);
+        _saving = false; _last = result;
+        if (result.Ok) { Toasts.Success(IsNew ? "Template created" : "Template saved", _m.Name); if (IsNew) Nav.NavigateTo($"/templates/{id}"); else await LoadAsync(); return; }
+        if (result.IsConcurrencyConflict) { _generalError = "Someone else changed this template. Reload to see their changes."; return; }
+        if (result.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = result.Message; return; }
+        Handle(result);
+    }
+
+    private async Task DeleteAsync()
+    {
+        _deleting = true;
+        var r = await Api.Templates.DeleteAsync(Id!.Value);
+        _deleting = false;
+        if (r.Ok) { _confirmDelete = false; Toasts.Success("Template deleted"); Nav.NavigateTo("/templates"); return; }
+        if (r.Outcome == ApiOutcome.Conflict) { _confirmDelete = false; Toasts.Error("Template is in use", r.Message); return; }
+        Handle(r);
+    }
+
+    private sealed class Model { public string Name { get; set; } = ""; public string Category { get; set; } = ""; public string? Description { get; set; } public string Script { get; set; } = ""; public uint? Version { get; set; } }
+}

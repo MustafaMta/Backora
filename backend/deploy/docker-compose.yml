@@ -1,0 +1,145 @@
+# Backora V2 — local/lab deployment (for production use deploy/production at the repository root).
+#   cd backend/deploy && ./generate-env.sh && docker compose up -d --build
+#   Lab (disposable SSH worker/target + S3):  docker compose --profile lab up -d --build
+# Frontend: http://localhost:8443  ·  API (internal): http://api:8080
+name: backora-lab   # distinct from any existing 'backora' stack on the same machine
+
+x-backend-env: &backend-env
+  ConnectionStrings__Backora: "Host=postgres;Port=5432;Database=backora;Username=backora_app;Password=${BACKORA_APP_PASSWORD};Maximum Pool Size=50"
+  # Key ids are fixed slot names; for rotation add Encryption__Keys__previous and switch ActiveKeyId.
+  Encryption__ActiveKeyId: primary
+  Encryption__Keys__primary: ${BACKORA_ENCRYPTION_KEY}
+  Platform__PublicUrl: ${BACKORA_PUBLIC_URL}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      BACKORA_OWNER_PASSWORD: ${BACKORA_OWNER_PASSWORD}
+      BACKORA_APP_PASSWORD: ${BACKORA_APP_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ../database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d backora"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  migrator:
+    build: { context: .., target: migrator }
+    image: backora-migrator:local
+    environment:
+      ConnectionStrings__Backora: "Host=postgres;Port=5432;Database=backora;Username=backora_owner;Password=${BACKORA_OWNER_PASSWORD}"
+      Encryption__ActiveKeyId: primary
+      Encryption__Keys__primary: ${BACKORA_ENCRYPTION_KEY}
+      Bootstrap__AdminEmail: ${BACKORA_ADMIN_EMAIL}
+      Bootstrap__AdminPassword: ${BACKORA_ADMIN_PASSWORD}
+    command: ["migrate"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    networks: [internal]
+
+  api:
+    build: { context: .., target: api }
+    image: backora-api:local
+    restart: unless-stopped
+    volumes:
+      - api-keys:/data/keys
+    # The execution host's SSH private key is a read-only secret file — never stored in PostgreSQL or sent to the UI.
+    secrets:
+      - source: execution_host_key
+        target: execution_host_key
+    depends_on:
+      migrator: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+    environment:
+      <<: *backend-env
+      Jwt__SigningKey: ${BACKORA_JWT_SIGNING_KEY}
+      ForwardedHeaders__KnownNetworks__0: 172.16.0.0/12
+      Worker__MaxConcurrentBackups: "10"
+      Worker__MaxConcurrentTransfers: "4"
+      ExecutionHost__PrivateKeyFile: /run/secrets/execution_host_key
+      ExecutionHost__TargetKeyFile: /run/secrets/execution_host_key
+    stop_grace_period: 60s
+    networks: [internal, lab]   # the API reaches only the execution host (SSH) and S3; all target access goes through the execution host
+
+  frontend:
+    build: { context: ../.., dockerfile: frontend/Dockerfile }
+    image: backora-frontend:local
+    restart: unless-stopped
+    environment:
+      Backend__BaseUrl: http://api:8080
+      Frontend__PublicUrl: ${BACKORA_PUBLIC_URL}
+      Frontend__AllowInsecureCookies: "true"   # local HTTP only — terminate TLS in front of Backora in production
+    ports:
+      - "127.0.0.1:8443:8080"
+    volumes:
+      - frontend-keys:/data/keys
+    depends_on:
+      api: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+    networks: [internal]
+
+  # ───────────── Lab profile: disposable infrastructure for demos and manual testing ─────────────
+  lab-worker:
+    profiles: [lab]
+    build: { context: ../tests/Backora.IntegrationTests/E2E/docker }
+    image: backora-lab-sshhost:local
+    environment:
+      AUTHORIZED_KEY: ${LAB_PUBLIC_KEY}
+      ALLOW_TCP_FORWARDING: "yes"
+    volumes: [lab-nfs:/BackoraDB]
+    networks: [lab]
+
+  lab-target:
+    profiles: [lab]
+    image: backora-lab-sshhost:local
+    environment:
+      AUTHORIZED_KEY: ${LAB_PUBLIC_KEY}
+      SEED_DATA: "1"
+    volumes: [lab-nfs:/BackoraDB]
+    depends_on: [lab-worker]
+    networks: [lab]
+
+  lab-s3:
+    profiles: [lab]
+    image: versity/versitygw@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316
+    command: ["posix", "/tmp"]
+    environment:
+      ROOT_ACCESS_KEY: ${LAB_S3_ACCESS_KEY}
+      ROOT_SECRET_KEY: ${LAB_S3_SECRET_KEY}
+    networks: [lab]
+
+secrets:
+  # Path on the Docker host to the execution host's private key (set BACKORA_EXECUTION_HOST_KEY_FILE in .env).
+  execution_host_key:
+    file: ${BACKORA_EXECUTION_HOST_KEY_FILE:?set BACKORA_EXECUTION_HOST_KEY_FILE to the execution host private key file}
+
+volumes:
+  pgdata:
+  api-keys:
+  frontend-keys:
+  lab-nfs:
+
+networks:
+  internal: {}
+  lab: {}

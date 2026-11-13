@@ -1,0 +1,133 @@
+@page "/transfers"
+@implements IAsyncDisposable
+<PageTitle>Transfers · Backora</PageTitle>
+
+<PageHead Title="Transfers" BackHref="/storage" BackLabel="Storage &amp; DR">
+    <Below>
+        <div class="viewbar">
+            <StorageTabs Active="transfers" />
+            <span style="width:1px;height:16px;background:var(--line)"></span>
+            <nav class="ui-tabs" aria-label="Views">
+                @foreach (var f in Filters) { <button type="button" aria-selected="@(_filter == f.Key ? "true" : "false")" @onclick="() => SetFilter(f.Key)">@f.Label</button> }
+            </nav>
+            <div class="viewbar__end"><SearchBox Placeholder="Filter by backup" Value="@_q" OnSearch="SearchAsync" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load transfers" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_page is null) { <ListSkel /> }
+    else if (_page.Items.Count == 0 && _filter == "failed") { <Empty Art="dr" Title="No failed transfers" Message="New failures appear here. Cleared ones are kept under Cleared." /> }
+    else if (_page.Items.Count == 0 && _filter == "cleared") { <Empty Art="dr" Title="Nothing cleared" Message="Failed copies you clear are kept here, out of the way of the rest of the history." /> }
+    else if (_page.Items.Count == 0) { <Empty Art="dr" Title="No transfers here" Message="Uploads to primary storage and copies to DR sites appear here." /> }
+    else
+    {
+        @if (_filter == "failed" && Can(Permissions.JobsRun))
+        {
+            <div class="row" style="justify-content:space-between;gap:12px;margin-bottom:12px">
+                <span class="muted">@Ui.Plural(_page.Total, "failed copy needs", "failed copies need") attention. Retry them, or clear the ones you have dealt with.</span>
+                <Btn Size="sm" Icon="check" OnClick="() => _confirmClear = true">Clear all</Btn>
+            </div>
+        }
+        <div class="ui-list__head cols-transfer" aria-hidden="true"><span></span><span>Backup</span><span>To</span><span>When</span><span>Status</span><span></span></div>
+        <div class="ui-list" role="list">
+            @foreach (var o in _page.Items)
+            {
+                <div class="ui-list__row cols-transfer" role="listitem">
+                    <span class="ui-glyph @(o.IsReplica ? "" : "ui-glyph--accent") @(o.Status is OffloadStatusDto.Running ? "ui-moving" : "")" title="@(o.IsReplica ? "DR copy" : "Upload")"><Icon Name="@(o.IsReplica ? "topology" : "cloud-upload")" Size="14" /></span>
+                    <span style="min-width:0">
+                        <span class="row" style="gap:8px">@if (o.BackupRunId is long rid) { <a class="ui-list__title" href="/runs/@rid">@o.JobName</a> } else { <span class="ui-list__title">@o.JobName</span> }<span class="ui-list__sub">@(o.IsReplica ? $"copy from {o.SourceDestinationName}" : "upload")</span></span>
+                        @if (o.Status is OffloadStatusDto.Running or OffloadStatusDto.Verifying) { <span class="ui-progress @(o.ProgressPercent is null ? "ui-progress--indeterminate" : "")" style="margin-top:5px;max-width:240px"><span style="width:@(string.Create(CultureInfo.InvariantCulture, $"{o.ProgressPercent ?? 35:0.#}%"))"></span></span> }
+                        else if (o.Status == OffloadStatusDto.Failed) { <span class="ui-list__sub t-bad" style="display:block">@StatusMap.Failure(o.FailureClass)</span> }
+                    </span>
+                    <span class="ui-list__meta hide-sm">@o.DestinationName@if (o.Encrypted) { <Icon Name="lock" Size="12" Class="muted" /> }</span>
+                    <span class="ui-list__meta hide-sm"><Ago Value="@(o.CompletedAt ?? o.StartedAt ?? o.CreatedAt)" /></span>
+                    @{ var replaced = o.Status == OffloadStatusDto.Failed && Ui.IsSuperseded(o, _page.Items); }
+                    <StatusBadge View="@(replaced ? Retried : o.Status == OffloadStatusDto.Failed && o.DismissedAt is not null ? Cleared : StatusMap.Offload(o))" />
+                    <span class="cell-end row" style="gap:6px;justify-content:flex-end">
+                        @if (o.Status == OffloadStatusDto.Failed && !replaced && !o.LegacyPrefix && Can(Permissions.JobsRun))
+                        {
+                            @if (o.DismissedAt is null) { <Btn Size="sm" Icon="check" Busy="@(_clearing == o.Id)" OnClick="() => ClearAsync(o)">Clear</Btn> }
+                            <Btn Size="sm" Icon="retry" Busy="@(_retrying == o.Id)" OnClick="() => RetryAsync(o)">Retry</Btn>
+                        }
+                    </span>
+                </div>
+            }
+        </div>
+        <Pager Page="_pageNo" PageSize="PageSize" Total="_page.Total" One="transfer" Many="transfers" OnChange="GoAsync" />
+    }
+</div>
+
+<Confirm @bind-Open="_confirmClear" Title="Clear all failed copies?" Icon="check" ConfirmText="Clear all" Busy="_clearingAll" OnConfirm="ClearAllAsync"
+         Message="They leave the transfer history and stop counting in alerts and job health, so only new failures show. Nothing is deleted: they are kept under Cleared and can still be retried." />
+
+@code {
+    private const int PageSize = 50;
+    private PagedResult<OffloadSummaryDto>? _page;
+    private string? _error, _q;
+    private string _filter = "all";
+    private int _pageNo = 1;
+    private long? _retrying, _clearing;
+    private bool _confirmClear, _clearingAll;
+    private PeriodicTimer? _timer;
+    private static readonly (string Key, string Label)[] Filters = [("all", "All"), ("active", "In progress"), ("failed", "Failed"), ("dr", "DR copies"), ("cleared", "Cleared")];
+
+    protected override async Task OnPageInitializedAsync() { await LoadAsync(); _ = PollAsync(); }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        OffloadStatusDto? status = _filter switch { "active" => OffloadStatusDto.Running, "failed" => OffloadStatusDto.Failed, _ => null };
+        var r = await Api.Offloads.ListAsync(status, null, _pageNo, PageSize, _filter == "dr" ? true : null, null, _q, _filter == "cleared");
+        _error = ErrorOf(r); _page = r.Value;
+    }
+
+    // Live progress: refresh quietly while anything is moving.
+    private async Task PollAsync()
+    {
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await _timer.WaitForNextTickAsync(PageToken))
+            {
+                if (_page?.Items.Any(o => !StatusMap.IsTerminal(o.Status)) != true) continue;
+                await LoadAsync(); await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private static readonly StatusView Retried = new("Retried", StatusTone.Neutral, "retry", "This attempt failed and was retried; see the newer attempt for this site.");
+    private static readonly StatusView Cleared = new("Cleared", StatusTone.Neutral, "check", "This copy failed and was cleared: it is kept here and can still be retried.");
+
+    private async Task ClearAsync(OffloadSummaryDto o)
+    {
+        _clearing = o.Id;
+        var r = await Api.Offloads.DismissAsync(o.Id);
+        _clearing = null;
+        if (Handle(r, "Cleared", $"{o.JobName} to {o.DestinationName} is out of the history now, kept under Cleared.")) await LoadAsync();
+    }
+
+    private async Task ClearAllAsync()
+    {
+        _clearingAll = true;
+        var r = await Api.Offloads.DismissAllFailedAsync();
+        _clearingAll = false;
+        _confirmClear = false;
+        if (Handle(r, "Failed list cleared", r.Value is { } v ? $"{Ui.Plural(v.Count, "failed copy", "failed copies")} cleared. New failures will show here." : null)) await LoadAsync();
+    }
+
+    private async Task RetryAsync(OffloadSummaryDto o)
+    {
+        _retrying = o.Id;
+        var r = await Api.Offloads.RetryAsync(o.Id);
+        _retrying = null;
+        if (Handle(r, $"Retrying {o.DestinationName}", "Only this site is retried.")) await LoadAsync();
+    }
+
+    private Task SetFilter(string k) { _filter = k; _pageNo = 1; _page = null; return LoadAsync(); }
+    private Task SearchAsync(string? q) { _q = q; _pageNo = 1; return LoadAsync(); }
+    private Task GoAsync(int p) { _pageNo = p; return LoadAsync(); }
+    public ValueTask DisposeAsync() { _timer?.Dispose(); Dispose(); return ValueTask.CompletedTask; }
+}

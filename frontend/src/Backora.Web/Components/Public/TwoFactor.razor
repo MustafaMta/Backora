@@ -1,0 +1,79 @@
+@page "/login/2fa"
+@inject AuthService Auth
+@inject NavigationManager Nav
+@inject Microsoft.AspNetCore.DataProtection.IDataProtectionProvider Protection
+
+<PageTitle>Two-step verification · Backora</PageTitle>
+
+<h1>Two-step verification</h1>
+<p>Enter the 6-digit code from your authenticator app.</p>
+
+@if (_expired)
+{
+    <div class="ui-callout ui-callout--warn" role="alert" style="margin-top:24px"><Icon Name="alert" Size="16" /><div>This verification step expired. <a href="/login">Sign in again</a>.</div></div>
+}
+else
+{
+    <EditForm Model="Model" FormName="twofactor" OnValidSubmit="SubmitAsync" method="post" novalidate>
+        <DataAnnotationsValidator />
+        @if (_error is not null) { <div class="ui-callout ui-callout--bad" role="alert"><Icon Name="circle-alert" Size="16" /><div>@_error</div></div> }
+        <FormField Label="@(Model.UseRecoveryCode ? "Recovery code" : "Verification code")" For="code">
+            <InputText id="code" class="ui-input mono" style="letter-spacing:.14em" @bind-Value="Model.Code" autocomplete="one-time-code" inputmode="@(Model.UseRecoveryCode ? "text" : "numeric")" aria-required="true" autofocus />
+            <ValidationMessage For="() => Model.Code" class="ui-error" />
+        </FormField>
+        <label class="ui-check"><InputCheckbox @bind-Value="Model.UseRecoveryCode" />Use a recovery code instead</label>
+        <input type="hidden" name="Model.ReturnUrl" value="@Model.ReturnUrl" />
+        <Btn Type="submit" Variant="primary" Size="lg" Block="true">Verify and continue</Btn>
+        <a href="/login" class="small">Back to sign in</a>
+    </EditForm>
+}
+
+@code {
+    private TwoFactorModel Model => Input ??= new();
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm(FormName = "twofactor", Name = "Model")] private TwoFactorModel? Input { get; set; }
+    [SupplyParameterFromQuery(Name = "returnUrl")] private string? ReturnUrlParam { get; set; }
+    private string? _error; private bool _expired;
+    private string CookieName => HttpContext.Request.IsHttps ? BffClaims.TwoFactorCookie : "backora.2fa";
+
+    protected override void OnInitialized() { Model.ReturnUrl ??= ReturnUrlParam; if (ReadToken() is null) _expired = true; }
+
+    private string? ReadToken()
+    {
+        if (!HttpContext.Request.Cookies.TryGetValue(CookieName, out var raw) || string.IsNullOrEmpty(raw)) return null;
+        try { return Protection.CreateProtector("Backora.TwoFactor").ToTimeLimitedDataProtector().Unprotect(raw); }
+        catch (System.Security.Cryptography.CryptographicException) { return null; }
+    }
+
+    private async Task SubmitAsync()
+    {
+        var token = ReadToken();
+        if (token is null) { _expired = true; return; }
+        var code = Model.Code.Replace(" ", string.Empty, StringComparison.Ordinal).Replace("-", Model.UseRecoveryCode ? "-" : string.Empty, StringComparison.Ordinal).Trim();
+        var result = await Auth.TwoFactorAsync(token, code, Model.UseRecoveryCode, HttpContext.RequestAborted);
+        if (!result.Ok || result.Value is null)
+        {
+            _error = result.Outcome switch
+            {
+                ApiOutcome.RateLimited => "Too many attempts. Wait a minute and try again.",
+                ApiOutcome.NetworkError => "Backora can't reach its service right now. Try again shortly.",
+                ApiOutcome.Unauthorized when result.Problem?.Code == "two_factor_expired" => "This verification step expired. Sign in again.",
+                _ => result.Problem?.Detail ?? "That code is not valid. Check your authenticator app and try again.",
+            };
+            Model.Code = string.Empty;
+            return;
+        }
+        HttpContext.Response.Cookies.Delete(CookieName, new CookieOptions { Path = "/", Secure = HttpContext.Request.IsHttps, SameSite = SameSiteMode.Strict });
+        await Auth.SignInAsync(HttpContext, result.Value);
+        Nav.NavigateTo(ReturnUrl.Sanitize(Model.ReturnUrl));
+    }
+
+    public sealed class TwoFactorModel
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Enter the code.")]
+        [System.ComponentModel.DataAnnotations.StringLength(32, MinimumLength = 6, ErrorMessage = "The code is too short.")]
+        public string Code { get; set; } = string.Empty;
+        public bool UseRecoveryCode { get; set; }
+        public string? ReturnUrl { get; set; }
+    }
+}

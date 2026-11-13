@@ -1,0 +1,44 @@
+@page "/templates"
+<PageTitle>Templates · Backora</PageTitle>
+
+<PageHead Title="Templates">
+    <Actions>@if (Can(Permissions.TemplatesWrite)) { <Btn Variant="primary" Href="/templates/new" Icon="plus">New template</Btn> }</Actions>
+    <Below>
+        <div class="viewbar">
+            <TemplateTabs Active="templates" />
+            <div class="viewbar__end"><SearchBox Placeholder="Filter templates" Value="@_q" OnSearch="SearchAsync" /></div>
+        </div>
+    </Below>
+</PageHead>
+
+<div class="app-page">
+    @if (_error is not null) { <Empty Error="true" Title="We couldn't load templates" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+    else if (_items is null) { <ListSkel Rows="4" /> }
+    else if (_items.Count == 0) { <Empty Art="backups" Title="No templates" Message="A template is the backup script a backup type runs, such as pg_dump or mariadb-backup." /> }
+    else
+    {
+        <div class="ui-list__head cols-template" aria-hidden="true"><span></span><span>Template</span><span>Kind</span><span style="text-align:right">Used by</span><span>Updated</span><span></span></div>
+        <div class="ui-list" role="list">
+            @foreach (var t in _items)
+            {
+                <a class="ui-list__row cols-template" href="/templates/@t.Id" role="listitem">
+                    <span class="ui-glyph @Ui.EngineGlyph(t.Category)"><Icon Name="@Ui.Engine(t.Category)" Size="14" /></span>
+                    <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none;max-width:50%">@t.Name</span><span class="ui-list__sub">@t.Description</span></span>
+                    <span class="ui-list__meta hide-sm">@Ui.EngineLabel(t.Category)</span>
+                    <span class="ui-list__meta hide-sm" style="text-align:right">@Ui.Plural(t.JobCount, "backup", "backups")</span>
+                    <span class="ui-list__meta hide-sm"><Ago Value="t.UpdatedAt" /></span>
+                    <Icon Name="chevron-right" Size="14" Class="chev hide-sm" />
+                </a>
+            }
+        </div>
+        <Pager Total="_items.Count" One="template" Many="templates" />
+    }
+</div>
+
+@code {
+    private List<TemplateSummaryDto>? _items;
+    private string? _error, _q;
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+    private async Task LoadAsync() { _error = null; var r = await Api.Templates.ListAsync(_q); _error = ErrorOf(r); _items = r.Value; }
+    private Task SearchAsync(string? q) { _q = q; return LoadAsync(); }
+}

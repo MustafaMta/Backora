@@ -1,0 +1,12 @@
+<div class="review__row">
+    <span class="ui-glyph"><Icon Name="@Icon" Size="15" /></span>
+    <span style="min-width:0"><span class="review__label" style="display:block">@Label</span><span class="review__value" style="display:block">@Value</span>@if (Sub is not null) { <span class="xs muted" style="display:block">@Sub</span> }</span>
+    @if (OnChange.HasDelegate) { <Btn Variant="ghost" Size="sm" OnClick="() => OnChange.InvokeAsync()">Change</Btn> }
+</div>
+@code {
+    [Parameter] public string Icon { get; set; } = "circle";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public string? Sub { get; set; }
+    [Parameter] public EventCallback OnChange { get; set; }
+}

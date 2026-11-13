@@ -1,0 +1,216 @@
+@page "/"
+<PageTitle>Overview · Backora</PageTitle>
+
+<PageHead Title="Protection overview" Subtitle="The state of every backup, copy and recovery point, from live data." />
+
+@if (_error is not null)
+{
+    <div class="app-page"><Empty Error="true" Title="We couldn't load the overview" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty></div>
+}
+else if (_d is null)
+{
+    <div class="app-page ov"><div class="ov-status"><Skel Width="56px" Height="56px" /><div class="stack-sm"><Skel Width="45%" Height="20px" /><Skel Width="70%" /></div></div><div class="inv">@for (var i = 0; i < 4; i++) { <div class="inv__item"><Skel Width="28px" Height="28px" /><div class="stack-sm"><Skel Width="50%" /><Skel Width="30%" Height="18px" /></div></div> }</div></div>
+}
+else
+{
+    var k = _d.Kpis;
+    <div class="app-page ov">
+        <section class="ov-status ov-status--@HeroTone" aria-labelledby="verdict">
+            <span class="ov-status__emblem"><ProtectionEmblem Tone="@HeroTone" /></span>
+            <div style="min-width:0">
+                <h2 id="verdict">@Verdict</h2>
+                <p>@VerdictDetail</p>
+                <div class="ov-status__facts">
+                    <span><Icon Name="circle-check" Size="13" />Last success <b>@(k.LastSuccessfulBackupAt is null ? "never" : Fmt.Relative(k.LastSuccessfulBackupAt))</b></span>
+                    <span><Icon Name="activity" Size="13" />Success rate, 14 days <b>@(k.SuccessRate is null ? "—" : $"{k.SuccessRate:0.#}%")</b></span>
+                    <span><Icon Name="recovery-point" Size="13" />Recovery points <b>@Fmt.Number(k.RecoveryPoints)</b></span>
+                    <span><Icon Name="topology" Size="13" />DR sites in use <b>@DrSiteCount</b></span>
+                </div>
+            </div>
+            <div class="ov-status__actions">
+                @if (_issues.Count > 0) { <Btn Href="#attention" Icon="alert">View problems</Btn> }
+                @if (Can(Permissions.RestoresExecute)) { <Btn Href="/restores/new" Icon="restore">Restore data</Btn> }
+                @if (Can(Permissions.JobsWrite)) { <Btn Variant="primary" Href="/jobs/new" Icon="plus">Create backup</Btn> }
+            </div>
+        </section>
+
+        <div class="inv">
+            <a class="inv__item" href="/servers"><span class="ui-glyph ui-glyph--accent"><Icon Name="server" Size="15" /></span><span style="min-width:0"><span class="inv__label">Protected servers</span><span class="inv__value" style="display:block">@k.ProtectedServers<small>of @k.TotalServers</small></span><span class="inv__sub" style="display:block">@(k.TotalServers - k.ProtectedServers == 0 ? "Every server is covered" : $"{k.TotalServers - k.ProtectedServers} without an active backup")</span></span></a>
+            <a class="inv__item" href="/jobs"><span class="ui-glyph ui-glyph--accent"><Icon Name="jobs" Size="15" /></span><span style="min-width:0"><span class="inv__label">Backup jobs</span><span class="inv__value" style="display:block">@k.ActiveJobs<small>active</small></span><span class="inv__sub" style="display:block">@(_jobs is null ? "" : $"{_jobs.Count(j => j.Status == JobStatusDto.Inactive)} paused · {k.ScheduledJobs} scheduled")</span></span></a>
+            <a class="inv__item" href="/runs"><span class="ui-glyph ui-glyph--flow"><Icon Name="history" Size="15" /></span><span style="min-width:0"><span class="inv__label">Latest successful backup</span><span class="inv__value" style="display:block;font-size:var(--fs-16)">@(k.LastSuccessfulBackupAt is null ? "None yet" : Fmt.Relative(k.LastSuccessfulBackupAt))</span><span class="inv__sub" style="display:block">@(LastOkRun?.JobName ?? "—")</span></span></a>
+            <a class="inv__item" href="@(_issues.Count > 0 ? "#attention" : "/jobs")"><span class="ui-glyph @(_issues.Count > 0 ? "ui-glyph--warn" : "ui-glyph--ok")"><Icon Name="@(_issues.Count > 0 ? "alert" : "shield-check")" Size="15" /></span><span style="min-width:0"><span class="inv__label">Needs attention</span><span class="inv__value" style="display:block">@_issues.Count</span><span class="inv__sub" style="display:block">@(_issues.Count == 0 ? "Nothing open" : _issues[0].Title)</span></span></a>
+        </div>
+
+        <div class="ov-grid">
+            <div class="ov-col">
+                @if (_issues.Count > 0)
+                {
+                    <Panel Title="Needs attention" Icon="alert" Flush="true">
+                        <Actions><span class="ui-count @(_issues.Any(i => i.Tone == "bad") ? "ui-count--bad" : "")">@_issues.Count</span></Actions>
+                        <ChildContent>
+                            <div id="attention" class="ui-list">
+                                @foreach (var i in _issues)
+                                {
+                                    <a class="ui-list__row" style="grid-template-columns:16px minmax(0,1fr) auto 16px" href="@i.Href">
+                                        <span class="ui-status ui-status--@i.Tone"><StatusIcon Kind="@(i.Tone == "bad" ? "bad" : "warn")" /></span>
+                                        <span style="min-width:0"><span class="ui-list__title" style="display:block">@i.Title</span><span class="ui-list__sub" style="display:block">@i.Detail</span></span>
+                                        <span class="ui-badge hide-sm">@i.Area</span>
+                                        <Icon Name="chevron-right" Size="14" Class="chev" />
+                                    </a>
+                                }
+                            </div>
+                        </ChildContent>
+                    </Panel>
+                }
+
+                <Panel Title="Backup activity" Icon="activity" Flush="true">
+                    <Actions><a href="/runs">Run history</a></Actions>
+                    <ChildContent>
+                        <div style="padding:16px 18px 14px;border-bottom:1px solid var(--line-soft)">
+                            <div class="strip" role="img" aria-label="@TrendLabel">
+                                @foreach (var p in Days)
+                                {
+                                    <div class="strip__day" title="@($"{p.Date:ddd d MMM}: {p.Succeeded} succeeded, {p.Failed} failed")">
+                                        <span class="strip__cell @CellTone(p)"></span>
+                                        <span class="strip__label">@p.Date.Day</span>
+                                    </div>
+                                }
+                            </div>
+                            <div class="strip-legend"><span><i style="background:color-mix(in srgb,var(--ok-dot) 78%,var(--surface))"></i>All succeeded</span><span><i style="background:var(--bad-dot)"></i>Failures</span><span><i style="background:var(--surface-3)"></i>No runs</span><span class="right">@k.RunsSucceeded succeeded · @k.RunsFailed failed · @k.RunsRunning running</span></div>
+                        </div>
+                        @if (_d.RecentRuns.Count == 0) { <Empty Compact="true" Icon="jobs" Title="No backups have run yet" /> }
+                        else
+                        {
+                            <div class="ui-list">
+                                @foreach (var r in _d.RecentRuns.Take(6))
+                                {
+                                    <a class="ui-list__row cols-recent" href="/runs/@r.Id">
+                                        <span class="ui-glyph @Ui.EngineGlyph(r.Category)"><Icon Name="@Ui.Engine(r.Category)" Size="15" /></span>
+                                        <span style="min-width:0"><span class="ui-list__title" style="display:block">@r.JobName</span><span class="ui-list__sub" style="display:block">@r.ServerName · @StatusMap.Trigger(r.Trigger)</span></span>
+                                        <span class="ui-list__meta hide-sm" style="text-align:right">@Fmt.Bytes(r.TotalArtifactBytes)</span>
+                                        <span class="ui-list__meta hide-sm" style="text-align:right"><Ago Value="@(r.CompletedAt ?? r.StartedAt ?? r.CreatedAt)" /></span>
+                                        <StatusBadge View="StatusMap.Run(r.Status)" />
+                                    </a>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </Panel>
+            </div>
+
+            <div class="ov-col">
+                <Panel Title="Recovery readiness" Icon="shield-check">
+                    <div class="ready">
+                        <div class="ready__row">
+                            <span class="ui-glyph ui-glyph--flow"><Icon Name="recovery-point" Size="15" /></span>
+                            <span><b>Latest recovery point</b><small>@(_latestPoint is null ? "No copy has been stored yet" : $"{_latestPoint.JobName} · {_latestPoint.DestinationName}")</small></span>
+                            <span class="ready__value">@(_latestPoint is null ? "—" : Fmt.Relative(_latestPoint.CompletedAt ?? _latestPoint.CreatedAt))</span>
+                        </div>
+                        <div class="ready__row">
+                            <span class="ui-glyph ui-glyph--ok"><Icon Name="verified" Size="15" /></span>
+                            <span><b>Verified copies</b><small>Checksums matched after upload, recent copies</small></span>
+                            <span class="ready__value">@_verified <span class="muted" style="font-weight:500">/ @_recentCopies</span></span>
+                        </div>
+                        <div class="ready__row">
+                            <span class="ui-glyph @(_failedVerify > 0 ? "ui-glyph--bad" : "")"><Icon Name="circle-alert" Size="15" /></span>
+                            <span><b>Failed verification</b><small>Copies whose checksums didn't match</small></span>
+                            <span class="ready__value @(_failedVerify > 0 ? "t-bad" : "")">@_failedVerify</span>
+                        </div>
+                        <div class="ready__row">
+                            <span class="ui-glyph @(_withoutCopy > 0 ? "ui-glyph--warn" : "")"><Icon Name="s3" Size="15" /></span>
+                            <span><b>Jobs without a restorable copy</b><small>Active jobs with no off-site copy or no successful run</small></span>
+                            <span class="ready__value @(_withoutCopy > 0 ? "t-warn" : "")">@_withoutCopy</span>
+                        </div>
+                        <div class="ready__row">
+                            <span class="ui-glyph @(_lastRestore is null ? "ui-glyph--warn" : "ui-glyph--accent")"><Icon Name="restore" Size="15" /></span>
+                            <span><b>Restore proven</b><small>@(_lastRestore is null ? "No restore has completed yet. Verification isn't the same as a tested restore." : $"{_lastRestore.JobName} restored and verified")</small></span>
+                            <span class="ready__value">@(_lastRestore is null ? "Not yet" : Fmt.Relative(_lastRestore.CompletedAt))</span>
+                        </div>
+                    </div>
+                </Panel>
+                <Panel Title="Coming up" Icon="calendar-clock" Flush="true">
+                    @if (_d.Upcoming.Count == 0) { <p class="muted xs" style="padding:14px 18px">Nothing scheduled. Paused or manual jobs don't appear here.</p> }
+                    else
+                    {
+                        <div class="ui-list">
+                            @foreach (var u in _d.Upcoming.Take(4))
+                            {
+                                <a class="ui-list__row" style="grid-template-columns:minmax(0,1fr) auto" href="/jobs/@u.JobId">
+                                    <span style="min-width:0"><span class="ui-list__title" style="display:block">@u.JobName</span><span class="ui-list__sub" style="display:block">@u.ScheduleDescription</span></span>
+                                    <span class="ui-list__meta" title="@Clock.Format(u.NextRunAt)">@Fmt.Relative(u.NextRunAt)</span>
+                                </a>
+                            }
+                        </div>
+                    }
+                </Panel>
+            </div>
+        </div>
+
+        <Panel Title="Disaster recovery" Icon="topology">
+            <Actions><a href="/storage">Storage &amp; DR</a></Actions>
+            <ChildContent>
+                @if (_jobs is null || _sites is null) { <Skel Height="120px" /> }
+                else { <DrTopology Jobs="_jobs" Sites="_sites" Copies="_copies" /> }
+            </ChildContent>
+        </Panel>
+    </div>
+}
+
+@code {
+    private DashboardDto? _d;
+    private List<S3DestinationDto>? _sites;
+    private List<BackupJobDto>? _jobs;
+    private List<OffloadSummaryDto> _copies = [];
+    private string? _error;
+    private List<ProtectionIssue> _issues = [];
+    private OffloadSummaryDto? _latestPoint;
+    private RestoreSummaryDto? _lastRestore;
+    private int _verified, _recentCopies, _failedVerify, _withoutCopy;
+
+
+    private ProtectionSummary Summary => ProtectionSummary.From(_d!);
+    private bool NothingRunning => _d!.Kpis.ActiveJobs == 0;
+    private string HeroTone => Summary.Problems > 0 ? "bad" : NothingRunning || Summary.ToReview > 0 ? "warn" : "ok";
+    private string Verdict => Summary.Problems > 0
+        ? (Summary.Problems == 1 ? "One problem needs attention" : $"{Summary.Problems} problems need attention")
+        : NothingRunning ? (_jobs is { Count: > 0 } ? "No backups are scheduled — every job is paused" : "No backups are set up yet")
+        : Summary.ToReview > 0 ? (Summary.ToReview == 1 ? "Backups are running, with one item to review" : $"Backups are running, with {Summary.ToReview} items to review")
+        : "Your backups are operating normally";
+    private string VerdictDetail => Summary.Problems > 0 ? "Some data may not be protected until these are fixed."
+        : NothingRunning ? (_jobs is { Count: > 0 } ? "Existing recovery points stay restorable, but no new backups will be taken until a job is resumed." : "Create a backup job to start protecting your data.")
+        : Summary.ToReview > 0 ? "Backups are completing. A few items could leave data unprotected if left alone."
+        : "Scheduled backups are completing and copies are reaching storage.";
+    private int DrSiteCount => _jobs?.SelectMany(j => j.ReplicationTargets ?? []).Select(t => t.DestinationId).Distinct().Count() ?? 0;
+    private RunSummaryDto? LastOkRun => _d?.RecentRuns.FirstOrDefault(r => r.Status == RunStatusDto.Completed);
+    private IEnumerable<DailyRunPointDto> Days => _d!.RunTrend.TakeLast(14);
+    private string TrendLabel => $"Backup runs over the last 14 days: {_d!.Kpis.RunsSucceeded} succeeded, {_d.Kpis.RunsFailed} failed.";
+    private static string CellTone(DailyRunPointDto p) => p.Succeeded + p.Failed == 0 ? "" : p.Failed == 0 ? "strip__cell--ok" : p.Succeeded == 0 ? "strip__cell--bad" : "strip__cell--mixed";
+
+    protected override async Task OnPageInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        var to = DateTimeOffset.UtcNow;
+        var dash = Api.Dashboard.GetAsync(to.AddDays(-14), to, PageToken);
+        var sites = Can(Permissions.StorageRead) ? Api.Storage.ListAsync() : null;
+        var jobs = Can(Permissions.JobsRead) ? Api.Jobs.ListAsync(new JobFilter(), 1, 200, "name") : null;
+        var points = Can(Permissions.RecoveryPointsRead) ? Api.RecoveryPoints.ListAsync(new RecoveryPointFilter(), 1, 200, "-createdAt") : null;
+        var d = await dash;
+        _error = ErrorOf(d);
+        if (_error is not null || d.Value is null) { _error ??= "No data was returned."; return; }
+        _d = d.Value;
+        _sites = sites is null ? [] : (await sites).Value ?? [];
+        _jobs = jobs is null ? [] : (await jobs).Value?.Items.ToList() ?? [];
+        _copies = points is null ? [] : (await points).Value?.Items.ToList() ?? [];
+
+        var stored = _copies.Where(c => c.Status == OffloadStatusDto.Completed && c.RetentionState is RetentionStateDto.Active or RetentionStateDto.Expired).ToList();
+        _latestPoint = stored.FirstOrDefault();
+        _recentCopies = stored.Count;
+        _verified = stored.Count(c => c.VerificationStatus == VerificationStatusDto.Verified);
+        _failedVerify = _copies.Count(c => c.VerificationStatus == VerificationStatusDto.Failed);
+        _withoutCopy = _jobs.Count(j => j.Status == JobStatusDto.Active && (j.S3DestinationId is null || j.LastSuccessAt is null));
+        _lastRestore = _d.RecentRestores.Where(r => r.Status == RestoreStatusDto.Completed).OrderByDescending(r => r.CompletedAt).FirstOrDefault();
+        _issues = ProtectionIssues.From(_d);
+    }
+}

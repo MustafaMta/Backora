@@ -1,0 +1,230 @@
+@page "/execution-host"
+<PageTitle>Execution host · Backora</PageTitle>
+
+<PageHead Title="Execution host" Subtitle="@(_h is null ? null : (_h.Node.Configured ? $"{_h.Node.Host} · runs every backup, transfer and restore" : "Not set up yet"))">
+    <Lead><span class="ui-glyph ui-glyph--lg ui-glyph--accent"><Icon Name="execution-host" Size="22" /></span></Lead>
+    <Suffix>@if (_h is not null) { <StatusBadge View="State" /> }</Suffix>
+    <Actions>
+        @if (Can(Permissions.SettingsWrite)) { <Btn Icon="settings" OnClick="OpenSettings">Connection settings</Btn> }
+        @if (Can(Permissions.SettingsWrite)) { <Btn Variant="primary" Icon="plug" Busy="_testing" Disabled="@(_h?.Node.Configured != true)" OnClick="TestAsync">Test connection</Btn> }
+    </Actions>
+</PageHead>
+
+@if (_error is not null) { <Empty Error="true" Title="We couldn't load the execution host" Message="@_error"><Actions><Btn OnClick="LoadAsync" Icon="refresh">Try again</Btn></Actions></Empty> }
+else if (_h is null) { <Loading Text="Loading execution host…" /> }
+else
+{
+    var n = _h.Node;
+    <div class="detail app-page">
+        <div class="detail__main">
+            <div class="lead-figs">
+                <span><Icon Name="activity" Size="14" />Running <strong>@(_h.RunningBackups + _h.RunningTransfers + _h.RunningRestores)</strong></span>
+                <span><Icon Name="circle-check" Size="14" />Done today <strong>@_h.CompletedLast24h</strong></span>
+                <span><Icon Name="circle-alert" Size="14" />Failed today <strong>@_h.FailedLast24h</strong></span>
+            </div>
+            <div class="detail__body">
+                @if (!n.Configured)
+                {
+                    <div class="ui-callout ui-callout--warn"><Icon Name="alert" Size="15" /><div><strong>Nothing can run yet.</strong> Add the execution host's address and SSH user in Connection settings.</div></div>
+                }
+                @if (_test is not null)
+                {
+                    <div class="ui-callout @(_test.Success ? "ui-callout--ok" : "ui-callout--bad")"><Icon Name="@(_test.Success ? "circle-check" : "circle-alert")" Size="15" /><div><strong>@(_test.Success ? "Connected." : "Couldn't connect.")</strong> @_test.Message</div></div>
+                }
+                @if (PendingFingerprint is { } fp && Can(Permissions.SettingsWrite))
+                {
+                    <div class="ui-callout ui-callout--warn"><Icon Name="shield-alert" Size="15" /><div class="stack-sm"><div><strong>Confirm the execution host's identity.</strong> Nothing runs until its host key is trusted.</div><code class="mono xs">@fp</code><div><Btn Size="sm" Icon="shield-check" OnClick="() => _confirmTrust = true">Trust this key</Btn></div></div></div>
+                }
+
+                <Panel Title="Servers reached through it" Flush="true">
+                    @if (_h.Targets.Count == 0) { <p class="muted" style="padding:14px 18px">No servers yet. <a href="/servers/new">Add a server</a>.</p> }
+                    else
+                    {
+                        <div class="ui-list ui-list--inset">
+                            @foreach (var t in _h.Targets)
+                            {
+                                <a class="ui-list__row" style="grid-template-columns:22px minmax(0,1fr) auto 120px" href="/servers/@t.ServerId">
+                                    <span class="ui-glyph"><Icon Name="server" Size="14" /></span>
+                                    <span class="row" style="min-width:0;gap:8px"><span class="ui-list__title" style="flex:none">@t.Name</span><span class="ui-list__sub mono">@t.Host:@t.Port</span></span>
+                                    <span class="ui-list__meta hide-sm">@Ui.Plural(t.Jobs, "backup", "backups")</span>
+                                    <StatusBadge View="TargetState(t)" />
+                                </a>
+                            }
+                        </div>
+                    }
+                </Panel>
+
+                <Panel Title="Capabilities">
+                    <Actions>@if (Can(Permissions.SettingsWrite) && n.Configured) { <Btn Size="sm" Variant="ghost" Icon="radar" Busy="_probing" OnClick="ProbeAsync">Check again</Btn> }</Actions>
+                    <ChildContent>
+                        @if (_h.Probe is not { } p) { <p class="muted">Not checked yet. Backora runs a fixed, read-only check of the tools installed on the host.</p> }
+                        else
+                        {
+                            <div class="stack">
+                                <div class="figs">
+                                    <div class="fig"><span class="fig__label">System</span><span class="fig__value" style="font-size:var(--fs-14)">@p.OperatingSystem</span><span class="fig__sub">@p.Hostname</span></div>
+                                    <div class="fig"><span class="fig__label">CPUs</span><span class="fig__value">@p.Cpus</span></div>
+                                    <div class="fig"><span class="fig__label">Memory free</span><span class="fig__value">@Fmt.Bytes(p.MemoryAvailableBytes)</span><span class="fig__sub">of @Fmt.Bytes(p.MemoryBytes)</span></div>
+                                    <div class="fig"><span class="fig__label">Checked</span><span class="fig__value" style="font-size:var(--fs-14)">@Fmt.Relative(p.ProbedAt)</span></div>
+                                </div>
+                                <div class="ui-list ui-list--inset">
+                                    @foreach (var t in p.Tools.OrderBy(t => t.Version is null).ThenBy(t => t.Name))
+                                    {
+                                        <div class="ui-list__row" style="grid-template-columns:16px minmax(0,1fr) minmax(0,45%);min-height:32px">
+                                            <span class="ui-status ui-status--@(t.Version is null ? "muted" : "ok")"><StatusIcon Kind="@(t.Version is null ? "idle" : "ok")" /></span>
+                                            <span class="row" style="gap:8px"><span class="strong">@t.Name</span><span class="ui-list__sub">@t.Category</span></span>
+                                            <span class="ui-list__meta mono" style="text-align:right" title="@t.Version">@(t.Version is null ? "not installed" : t.Version.Trim('*', ' '))</span>
+                                        </div>
+                                    }
+                                </div>
+                                @if (p.Disks.Count > 0)
+                                {
+                                    <details class="ui-disclose"><summary><Icon Name="hard-drive" Size="14" />Disks and services<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                                        <div class="ui-disclose__body stack-sm">
+                                            @foreach (var d in p.Disks) { <div class="row xs"><span class="mono grow truncate">@d.Path</span><span class="muted">@d.FileSystem</span><span class="num">@Fmt.Bytes(d.AvailableBytes) free of @Fmt.Bytes(d.SizeBytes)</span></div> }
+                                            @foreach (var sv in p.Services) { <div class="row xs"><span class="grow">@sv.Name</span><span class="muted">@sv.State</span></div> }
+                                        </div>
+                                    </details>
+                                }
+                            </div>
+                        }
+                    </ChildContent>
+                </Panel>
+            </div>
+        </div>
+        <aside class="detail__aside" aria-label="Properties">
+            <div>
+                <div class="aside-title">Connection</div>
+                <dl class="ui-props">
+                    <dt>Address</dt><dd class="mono xs">@(n.Configured ? $"{n.Host}:{n.SshPort}" : "—")</dd>
+                    <dt>User</dt><dd class="mono xs">@(string.IsNullOrEmpty(n.SshUser) ? "—" : n.SshUser)</dd>
+                    <dt>Key</dt><dd>@(SecretFile ? "Mounted secret" : n.HasPrivateKey ? "Stored" : "Not set")</dd>
+                    <dt>Identity</dt><dd>@(n.HostKeyTrustedAt is null ? "Not trusted" : $"Trusted {Fmt.Relative(n.HostKeyTrustedAt)}")</dd>
+                    <dt>Last test</dt><dd>@(n.LastConnectionTestAt is null ? "Never" : $"{(n.LastConnectionTestSucceeded == true ? "Passed" : "Failed")} {Fmt.Relative(n.LastConnectionTestAt)}")</dd>
+                </dl>
+            </div>
+            <details class="ui-disclose">
+                <summary><Icon Name="settings" Size="14" />Technical details<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                <div class="ui-disclose__body"><dl class="ui-props"><dt>Host key</dt><dd class="mono xs">@(n.HostKeyFingerprint ?? "—")</dd><dt>Transfer tool</dt><dd class="mono xs">@n.RclonePath</dd><dt>Work folder</dt><dd class="mono xs">@n.WorkDirectory</dd></dl></div>
+            </details>
+        </aside>
+    </div>
+
+    <Dialog @bind-Open="_settingsOpen" Title="Connection settings" Icon="execution-host" Large="true">
+        <ChildContent>
+            <div class="stack">
+                @if (_generalError is not null) { <div class="ui-callout ui-callout--bad"><Icon Name="circle-alert" Size="15" /><div>@_generalError</div></div> }
+                <div class="ui-form-grid">
+                    <FormField Label="Address" For="eh-host" Error="@Err("Host")" Class="full"><input id="eh-host" class="ui-input mono" @bind="_m.Host" placeholder="10.0.0.10" /></FormField>
+                    <FormField Label="SSH user" For="eh-user" Error="@Err("SshUser")"><input id="eh-user" class="ui-input mono" @bind="_m.SshUser" /></FormField>
+                    <FormField Label="Port" For="eh-port" Error="@Err("SshPort")"><input id="eh-port" class="ui-input" type="number" min="1" max="65535" @bind="_m.SshPort" /></FormField>
+                </div>
+                @if (SecretFile) { <div class="ui-callout"><Icon Name="lock" Size="15" /><div>The private key is provided by the deployment as a mounted secret and can't be changed here.</div></div> }
+                else
+                {
+                    <FormField Label="Private key" For="eh-key" Error="@Err("PrivateKey")" Hint="@(n.HasPrivateKey ? "Leave empty to keep the stored key." : "OpenSSH or PEM format. Never shown again.")">
+                        <textarea id="eh-key" class="ui-textarea ui-textarea--key" rows="3" spellcheck="false" autocomplete="off" @bind="_m.PrivateKey"></textarea>
+                    </FormField>
+                }
+                <details class="ui-disclose"><summary><Icon Name="settings" Size="14" />Advanced<Icon Name="chevron-down" Size="14" Class="chev" /></summary>
+                    <div class="ui-disclose__body ui-form-grid">
+                        <FormField Label="Transfer tool path" For="eh-rclone" Error="@Err("RclonePath")"><input id="eh-rclone" class="ui-input mono" @bind="_m.RclonePath" /></FormField>
+                        <FormField Label="Work folder" For="eh-work" Error="@Err("WorkDirectory")"><input id="eh-work" class="ui-input mono" @bind="_m.WorkDirectory" /></FormField>
+                    </div>
+                </details>
+            </div>
+        </ChildContent>
+        <Footer><Btn OnClick="() => _settingsOpen = false">Cancel</Btn><Btn Variant="primary" Busy="_saving" OnClick="SaveAsync">Save</Btn></Footer>
+    </Dialog>
+    <Confirm @bind-Open="_confirmTrust" Title="Trust this host key?" Icon="shield-check" ConfirmText="Trust key" Busy="_trusting" OnConfirm="TrustAsync" Message="@($"Backora will only connect while the execution host presents {PendingFingerprint}.")" />
+}
+
+@code {
+    private ExecutionHostDto? _h;
+    private ConnectionTestResultDto? _test;
+    private string? _error, _generalError;
+    private ApiResult? _last;
+    private bool _testing, _probing, _trusting, _saving, _settingsOpen, _confirmTrust;
+    private readonly Model _m = new();
+
+    private bool SecretFile => string.Equals(_h?.Node.PrivateKeySource, "secret-file", StringComparison.OrdinalIgnoreCase);
+    private string? PendingFingerprint => _test is { WorkerFingerprint: { } fp, WorkerFingerprintTrusted: false } ? fp
+        : _h?.Node is { Configured: true, HostKeyTrustedAt: null, HostKeyFingerprint: { } f } ? f : null;
+
+    private StatusView State => _h!.Node switch
+    {
+        { Configured: false } => new("Not set up", StatusTone.Warning),
+        { HostKeyTrustedAt: null } => new("Not trusted", StatusTone.Warning),
+        { LastConnectionTestSucceeded: false } => new("Can't connect", StatusTone.Danger),
+        _ => new("Connected", StatusTone.Success),
+    };
+
+    private static StatusView TargetState(ExecutionTargetDto t) =>
+        !t.HostKeyTrusted ? new("Not trusted", StatusTone.Warning) : t.LastTestSucceeded == false ? new("Can't connect", StatusTone.Danger) : t.LastTestSucceeded == true ? new("Reachable", StatusTone.Success) : new("Not tested", StatusTone.Neutral);
+
+    protected override Task OnPageInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var r = await Api.Settings.ExecutionHostAsync(PageToken);
+        _error = ErrorOf(r); _h = r.Value;
+    }
+
+    private void OpenSettings()
+    {
+        var n = _h?.Node;
+        _m.Host = n?.Host ?? ""; _m.SshPort = n is { SshPort: > 0 } ? n.SshPort : 22; _m.SshUser = n?.SshUser ?? ""; _m.RclonePath = n?.RclonePath ?? "rclone";
+        _m.WorkDirectory = n?.WorkDirectory ?? "/var/tmp/backora"; _m.Version = n?.Version; _m.PrivateKey = null; _generalError = null; _last = null;
+        _settingsOpen = true;
+    }
+
+    private string? Err(string f) => _last?.FieldError(f);
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _generalError = null;
+        var r = await Api.Settings.UpdateWorkerAsync(new WorkerNodeUpdateRequest(_m.Host.Trim(), _m.SshPort, _m.SshUser.Trim(),
+            SecretFile || string.IsNullOrWhiteSpace(_m.PrivateKey) ? null : _m.PrivateKey.Trim() + "\n", _m.RclonePath.Trim(), _m.WorkDirectory.Trim(), _m.Version));
+        _saving = false; _last = r;
+        if (r.Ok) { _m.PrivateKey = null; _settingsOpen = false; Toasts.Success("Execution host saved", "Test the connection next."); await LoadAsync(); return; }
+        if (r.IsConcurrencyConflict) { _generalError = "Someone else changed these settings. Close and reopen to see them."; return; }
+        if (r.Outcome is ApiOutcome.ValidationFailed or ApiOutcome.Conflict) { _generalError = r.Message; return; }
+        Handle(r);
+    }
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        var r = await Api.Settings.TestWorkerAsync();
+        _testing = false;
+        if (Handle(r)) { _test = r.Value; await LoadAsync(); }
+    }
+
+    private async Task ProbeAsync()
+    {
+        _probing = true;
+        var r = await Api.Settings.ProbeExecutionHostAsync();
+        _probing = false;
+        if (Handle(r, "Capabilities updated")) await LoadAsync();
+    }
+
+    private async Task TrustAsync()
+    {
+        if (PendingFingerprint is not { } fp) return;
+        _trusting = true;
+        var r = await Api.Settings.TrustWorkerHostKeyAsync(fp);
+        _trusting = false; _confirmTrust = false;
+        if (Handle(r, "Execution host trusted")) { if (_test is not null) _test = _test with { WorkerFingerprintTrusted = true }; await LoadAsync(); }
+    }
+
+    private sealed class Model
+    {
+        public string Host { get; set; } = "";
+        public int SshPort { get; set; } = 22;
+        public string SshUser { get; set; } = "";
+        public string? PrivateKey { get; set; }
+        public string RclonePath { get; set; } = "rclone";
+        public string WorkDirectory { get; set; } = "/var/tmp/backora";
+        public uint? Version { get; set; }
+    }
+}

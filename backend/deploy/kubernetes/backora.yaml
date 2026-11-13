@@ -1,0 +1,151 @@
+# Backora on Kubernetes / OpenShift (OKD). Apply into a dedicated namespace:
+#   kubectl -n backora apply -f backora.yaml        (oc -n backora apply -f backora.yaml)
+# Prerequisites: PostgreSQL 16+ with roles from database/init/01-create-roles.sh, images pushed to your registry,
+# and the Secret "backora-secrets" created out-of-band (see secret-template.yaml). Pods do not pin a UID so
+# OpenShift's restricted SCC can assign an arbitrary one (images are group-0 writable where needed).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backora-migrate
+  labels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: migrator }
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrator
+          image: registry.example.com/backora/backora-migrator:2.0.0
+          args: ["migrate"]
+          env:
+            - { name: ConnectionStrings__Backora, valueFrom: { secretKeyRef: { name: backora-secrets, key: owner-connection-string } } }
+            - { name: Encryption__ActiveKeyId, value: primary }
+            - { name: Encryption__Keys__primary, valueFrom: { secretKeyRef: { name: backora-secrets, key: encryption-key } } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+      volumes: [{ name: tmp, emptyDir: {} }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backora-api
+  labels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: api }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: api } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: api } }
+    spec:
+      containers:
+        - name: api
+          image: registry.example.com/backora/backora-api:2.0.0
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: ConnectionStrings__Backora, valueFrom: { secretKeyRef: { name: backora-secrets, key: app-connection-string } } }
+            - { name: Encryption__ActiveKeyId, value: primary }
+            - { name: Encryption__Keys__primary, valueFrom: { secretKeyRef: { name: backora-secrets, key: encryption-key } } }
+            - { name: Jwt__SigningKey, valueFrom: { secretKeyRef: { name: backora-secrets, key: jwt-signing-key } } }
+            - { name: Platform__PublicUrl, value: "https://backora.example.com" }
+            - { name: ForwardedHeaders__KnownNetworks__0, value: "10.128.0.0/14" }
+            - { name: DataProtection__KeysPath, value: /data/keys }
+          readinessProbe: { httpGet: { path: /health/ready, port: http }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health/live, port: http }, periodSeconds: 20 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: dp-keys, mountPath: /data/keys }
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: "1", memory: 768Mi } }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        # Shared Data Protection keys (2FA challenges, reset tokens) across API replicas: RWX volume.
+        - { name: dp-keys, persistentVolumeClaim: { claimName: backora-api-dp-keys } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backora-api }
+spec:
+  selector: { app.kubernetes.io/name: backora, app.kubernetes.io/component: api }
+  ports: [{ port: 8080, targetPort: http, name: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backora-frontend
+  labels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: frontend }
+spec:
+  replicas: 1   # >1 requires session affinity (Blazor Server circuits + server-side session store)
+  selector: { matchLabels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: frontend } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: backora, app.kubernetes.io/component: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: registry.example.com/backora/backora-frontend:2.0.0  # Backora V2 frontend (frontend/Dockerfile)
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: Backend__BaseUrl, value: "http://backora-api:8080" }
+            - { name: Frontend__PublicUrl, value: "https://backora.example.com" }
+            # Sessions and the cookie key ring live on a private volume so restarts and redeploys keep users signed in;
+            # the key ring is encrypted at rest with a key from a Secret (a copy of the volume alone is useless).
+            - { name: Frontend__SessionsPath, value: /data/sessions }
+            - { name: DataProtection__KeysPath, value: /data/keys }
+            - name: DataProtection__KeyEncryptionKey
+              valueFrom: { secretKeyRef: { name: backora-frontend, key: DataProtection__KeyEncryptionKey } }
+          readinessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /health, port: http }, periodSeconds: 20 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: data, mountPath: /data }
+          resources: { requests: { cpu: 200m, memory: 256Mi }, limits: { cpu: "1", memory: 768Mi } }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: data, persistentVolumeClaim: { claimName: backora-frontend-data } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: backora-frontend }
+spec:
+  selector: { app.kubernetes.io/name: backora, app.kubernetes.io/component: frontend }
+  sessionAffinity: ClientIP
+  ports: [{ port: 8080, targetPort: http, name: http }]
+---
+# OpenShift Route with edge TLS (use an Ingress with TLS on vanilla Kubernetes).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: backora
+  annotations: { haproxy.router.openshift.io/balance: source }
+spec:
+  host: backora.example.com
+  to: { kind: Service, name: backora-frontend }
+  port: { targetPort: http }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: backora-api-dp-keys }
+spec: { accessModes: [ReadWriteMany], resources: { requests: { storage: 64Mi } } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: backora-frontend-data }
+# ReadWriteMany: during a rolling update the old and new pod share it.
+spec: { accessModes: [ReadWriteMany], resources: { requests: { storage: 256Mi } } }

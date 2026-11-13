@@ -1,0 +1,127 @@
+@* Searchable select (combobox): a trigger showing the current choice, and a popover with a search box,
+   keyboard navigation (↑ ↓ Enter Esc), highlighted matches, grouped status and a result count. *@
+@typeparam TItem
+<div class="ui-ss @(_open ? "is-open" : null) @Class">
+    <button type="button" class="ui-ss__trigger" id="@Id" aria-haspopup="listbox" aria-expanded="@(_open ? "true" : "false")" @onclick="ToggleAsync" disabled="@Disabled">
+        @if (Selected is { } sel)
+        {
+            <span class="ui-ss__glyph"><Icon Name="@Icon" Size="16" /></span>
+            <span class="ui-ss__value"><b>@Text(sel)</b>@if (Sub is not null) { <small>@Sub(sel)</small> }</span>
+        }
+        else
+        {
+            <span class="ui-ss__glyph ui-ss__glyph--empty"><Icon Name="@Icon" Size="16" /></span>
+            <span class="ui-ss__value ui-ss__value--empty">@Placeholder</span>
+        }
+        <Icon Name="chevron-down" Size="15" Class="ui-ss__chev" />
+    </button>
+    @if (_open)
+    {
+        <div class="ui-ss__backdrop" @onclick="CloseAsync"></div>
+        <div class="ui-ss__pop" role="dialog" aria-label="@Placeholder">
+            <div class="ui-ss__search">
+                <Icon Name="search" Size="15" />
+                <input @ref="_input" type="text" placeholder="@SearchPlaceholder" value="@_q" @oninput="OnQuery" @onkeydown="OnKey"
+                       aria-controls="@(Id)-list" aria-activedescendant="@(_view.Count > 0 ? $"{Id}-opt-{_active}" : null)" autocomplete="off" spellcheck="false" />
+                @if (_q.Length > 0) { <button type="button" class="ui-ss__clear" aria-label="Clear search" @onclick="ClearAsync"><Icon Name="x" Size="13" /></button> }
+            </div>
+            <ul class="ui-ss__list" role="listbox" id="@(Id)-list">
+                @for (var i = 0; i < _view.Count; i++)
+                {
+                    var item = _view[i]; var idx = i;
+                    var isSel = Selected is not null && Equals(Key(item), Key(Selected));
+                    <li id="@($"{Id}-opt-{i}")" role="option" aria-selected="@(isSel ? "true" : "false")" class="ui-ss__opt @(i == _active ? "is-active" : null) @(isSel ? "is-selected" : null)"
+                        @onclick="() => PickAsync(item)" @onmousemove="() => _active = idx">
+                        <span class="ui-ss__glyph"><Icon Name="@Icon" Size="15" /></span>
+                        <span class="ui-ss__opttext">
+                            <b>@Highlight(Text(item))</b>
+                            @if (Sub is not null) { <small>@Highlight(Sub(item))</small> }
+                        </span>
+                        @if (Trailing is not null) { <span class="ui-ss__badge">@Trailing(item)</span> }
+                        @if (isSel) { <Icon Name="check" Size="15" Class="ui-ss__tick" /> }
+                    </li>
+                }
+                @if (_view.Count == 0)
+                {
+                    <li class="ui-ss__empty"><Icon Name="search" Size="16" /><span>No matches for “@_q”</span></li>
+                }
+            </ul>
+            <div class="ui-ss__foot"><span>@_view.Count of @Items.Count</span><span class="ui-ss__keys"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>↵</kbd> select <kbd>esc</kbd> close</span></div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<TItem> Items { get; set; } = [];
+    [Parameter, EditorRequired] public Func<TItem, string> Text { get; set; } = _ => "";
+    [Parameter, EditorRequired] public Func<TItem, object> Key { get; set; } = x => x!;
+    [Parameter] public Func<TItem, string>? Sub { get; set; }
+    [Parameter] public RenderFragment<TItem>? Trailing { get; set; }
+    [Parameter] public TItem? Selected { get; set; }
+    [Parameter] public EventCallback<TItem> OnSelect { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Select…";
+    [Parameter] public string SearchPlaceholder { get; set; } = "Search…";
+    [Parameter] public string Icon { get; set; } = "server";
+    [Parameter] public string Id { get; set; } = "ss-" + Guid.NewGuid().ToString("N")[..8];
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Class { get; set; }
+
+    private bool _open, _focus;
+    private string _q = "";
+    private int _active;
+    private List<TItem> _view = [];
+    private ElementReference _input;
+
+    private Task ToggleAsync() => _open ? CloseAsync() : OpenAsync();
+
+    private Task OpenAsync()
+    {
+        _open = true; _q = ""; Filter();
+        _active = Selected is null ? 0 : Math.Max(0, _view.FindIndex(x => Equals(Key(x), Key(Selected))));
+        _focus = true;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseAsync() { _open = false; return Task.CompletedTask; }
+    private Task ClearAsync() { _q = ""; Filter(); _focus = true; return Task.CompletedTask; }
+
+    private void OnQuery(ChangeEventArgs e) { _q = e.Value?.ToString() ?? ""; Filter(); _active = 0; }
+
+    private void Filter()
+    {
+        var terms = _q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        _view = Items.Where(i => terms.All(t => Text(i).Contains(t, StringComparison.OrdinalIgnoreCase) || (Sub?.Invoke(i) ?? "").Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown": if (_view.Count > 0) _active = (_active + 1) % _view.Count; break;
+            case "ArrowUp": if (_view.Count > 0) _active = (_active - 1 + _view.Count) % _view.Count; break;
+            case "Enter": if (_active < _view.Count) await PickAsync(_view[_active]); break;
+            case "Escape": await CloseAsync(); break;
+        }
+    }
+
+    private async Task PickAsync(TItem item) { _open = false; await OnSelect.InvokeAsync(item); }
+
+    private RenderFragment Highlight(string text) => b =>
+    {
+        var term = _q.Split(' ', StringSplitOptions.RemoveEmptyEntries).OrderByDescending(t => t.Length).FirstOrDefault();
+        var at = term is null ? -1 : text.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) { b.AddContent(0, text); return; }
+        b.AddContent(0, text[..at]);
+        b.OpenElement(1, "mark"); b.AddContent(2, text.Substring(at, term!.Length)); b.CloseElement();
+        b.AddContent(3, text[(at + term.Length)..]);
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focus && _open)
+        {
+            _focus = false;
+            try { await _input.FocusAsync(); } catch (InvalidOperationException) { }
+        }
+    }
+}
